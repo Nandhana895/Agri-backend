@@ -232,6 +232,29 @@ function startServer() {
       }
     });
 
+    // Typing indicator: { toUserId?, toEmail? }
+    socket.on('typing', async (payload = {}) => {
+      try {
+        if (!socket.user?._id) return;
+        const { toUserId, toEmail } = payload || {};
+        let targetId = toUserId;
+        let targetEmail = typeof toEmail === 'string' ? String(toEmail).trim().toLowerCase() : '';
+        if (!targetId && targetEmail) {
+          const target = await User.findOne({ email: targetEmail }).select('_id email');
+          if (!target) return;
+          targetId = target._id.toString();
+        }
+        if (!targetId && !targetEmail) return;
+        const outbound = {
+          fromUserId: socket.user._id.toString(),
+          fromEmail: String(socket.user.email || '').toLowerCase()
+        };
+        io.to(`user:${targetId || ''}`).to(`email:${targetEmail || ''}`).emit('typing', outbound);
+      } catch (_) {
+        // noop
+      }
+    });
+
     socket.on('disconnect', () => {});
   });
 
