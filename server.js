@@ -2,6 +2,8 @@
 require('dotenv').config();
 
 const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const config = require('./config/config');
@@ -10,9 +12,16 @@ const User = require('./models/User');
 // Import routes
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
+const farmerRoutes = require('./routes/farmer');
+const chatRoutes = require('./routes/chat');
+const path = require('path');
+const Conversation = require('./models/Conversation');
+const Message = require('./models/Message');
 
 // Initialize express app
 const app = express();
+const server = http.createServer(app);
+let io = null;
 
 // Middleware
 app.use(express.json({ limit: '10mb' }));
@@ -22,9 +31,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cors({
   origin: config.FRONTEND_URL,
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Static files for uploaded images
+app.use('/api/admin/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Connect to MongoDB
 console.log('🔍 Attempting to connect to MongoDB...');
@@ -49,12 +61,25 @@ mongoose.connect(config.MONGODB_URI)
           await admin.save();
           console.log(`👑 Seeded default admin → ${config.ADMIN_EMAIL}`);
         } else {
-          console.log(`👑 Admin present → ${existingAdmin.email}`);
+          // If an admin exists but email differs from configured admin email,
+          // update the existing admin to match configured credentials
+          if (existingAdmin.email !== config.ADMIN_EMAIL) {
+            existingAdmin.email = config.ADMIN_EMAIL;
+            existingAdmin.name = config.ADMIN_NAME;
+            existingAdmin.password = config.ADMIN_PASSWORD; // will be hashed by pre-save
+            await existingAdmin.save();
+            console.log(`👑 Updated existing admin to configured email → ${config.ADMIN_EMAIL}`);
+          } else {
+            console.log(`👑 Admin present → ${existingAdmin.email}`);
+          }
         }
       } catch (e) {
         console.error('⚠️  Failed to seed admin user:', e);
       }
     })();
+    
+    // Start server after MongoDB connection
+    startServer();
   })
   .catch((error) => {
     console.error('❌ MongoDB connection error:', error);
@@ -73,6 +98,8 @@ mongoose.connection.on('disconnected', () => {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/farmer', farmerRoutes);
+app.use('/api/chat', chatRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -103,15 +130,119 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Start server
-const PORT = config.PORT;
-app.listen(PORT, () => {
-  console.log('🚀 Server started successfully');
-  console.log(`🌐 Server running on port ${PORT}`);
-  console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
-  console.log(`🔗 Health Check: http://localhost:${PORT}/api/health`);
-  console.log(`🔗 Frontend URL: ${config.FRONTEND_URL}`);
-});
+// Start server function
+function startServer() {
+  const PORT = config.PORT;
+  // Initialize Socket.IO after DB is ready
+  io = new Server(server, {
+    cors: {
+      origin: config.FRONTEND_URL,
+      credentials: true
+    }
+  });
+
+  // Socket auth using Bearer token
+  io.use(async (socket, next) => {
+    try {
+      const authHeader = socket.handshake.auth?.token || socket.handshake.headers?.authorization;
+      if (!authHeader) return next();
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+      if (!token) return next();
+      const jwt = require('jsonwebtoken');
+      const payload = jwt.verify(token, config.JWT_SECRET);
+      const user = await User.findById(payload.userId).select('name email role isActive isBlocked');
+      if (!user || user.isBlocked || user.isActive === false) return next(new Error('Unauthorized'));
+      socket.user = user;
+      next();
+    } catch (_) {
+      next();
+    }
+  });
+
+  io.on('connection', (socket) => {
+    // Join personal room for direct messages
+    if (socket.user?._id) {
+      socket.join(`user:${socket.user._id.toString()}`);
+      if (socket.user.email) {
+        socket.join(`email:${String(socket.user.email).toLowerCase()}`);
+      }
+    }
+
+    // Direct message: { toUserId?, toEmail?, text }
+    socket.on('send_message', async (payload = {}, ack) => {
+      try {
+        if (!socket.user?._id) return typeof ack === 'function' && ack({ success: false, message: 'Unauthorized' });
+        const { toUserId, toEmail, text } = payload;
+        if (!text || (!toUserId && !toEmail)) {
+          return typeof ack === 'function' && ack({ success: false, message: 'Invalid payload' });
+        }
+        let targetId = toUserId;
+        if (!targetId && toEmail) {
+          const normalizedEmail = String(toEmail).trim().toLowerCase();
+          const target = await User.findOne({ email: normalizedEmail }).select('_id email');
+          if (!target) return typeof ack === 'function' && ack({ success: false, message: 'Recipient not found' });
+          targetId = target._id.toString();
+        }
+
+        // Find or create conversation
+        let convo = await Conversation.findOne({ participants: { $all: [socket.user._id, targetId] } });
+        if (!convo) {
+          const targetUser = await User.findById(targetId).select('email');
+          convo = await Conversation.create({
+            participants: [socket.user._id, targetId],
+            participantEmails: [String(socket.user.email || '').toLowerCase(), String(targetUser?.email || '').toLowerCase()],
+            lastMessageAt: new Date(),
+            lastMessageText: String(text).slice(0, 2000)
+          });
+        }
+
+        // Persist message
+        const saved = await Message.create({
+          conversationId: convo._id,
+          fromUserId: socket.user._id,
+          toUserId: targetId,
+          fromEmail: String(socket.user.email || '').toLowerCase(),
+          toEmail: String(toEmail || '').toLowerCase(),
+          text: String(text).slice(0, 2000),
+          readAt: null
+        });
+
+        // Update conversation summary
+        await Conversation.updateOne(
+          { _id: convo._id },
+          { $set: { lastMessageAt: saved.createdAt, lastMessageText: saved.text } }
+        );
+
+        const outbound = {
+          conversationId: convo._id.toString(),
+          fromUserId: socket.user._id.toString(),
+          fromName: socket.user.name,
+          fromEmail: socket.user.email,
+          toUserId: targetId,
+          toEmail: toEmail || '',
+          text: saved.text,
+          ts: saved.createdAt.getTime()
+        };
+
+        // Deliver to user room and email room for robustness
+        io.to(`user:${targetId}`).to(`email:${toEmail ? String(toEmail).toLowerCase() : ''}`).emit('receive_message', outbound);
+        typeof ack === 'function' && ack({ success: true, message: outbound });
+      } catch (e) {
+        typeof ack === 'function' && ack({ success: false, message: 'Send failed' });
+      }
+    });
+
+    socket.on('disconnect', () => {});
+  });
+
+  server.listen(PORT, () => {
+    console.log('🚀 Server started successfully');
+    console.log(`🌐 Server running on port ${PORT}`);
+    console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
+    console.log(`🔗 Health Check: http://localhost:${PORT}/api/health`);
+    console.log(`🔗 Frontend URL: ${config.FRONTEND_URL}`);
+  });
+}
 
 // Graceful shutdown
 process.on('SIGINT', async () => {

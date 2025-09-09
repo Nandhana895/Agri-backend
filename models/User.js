@@ -28,9 +28,36 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin'],
+    enum: ['user', 'admin', 'expert'],
     default: 'user',
     index: true
+  },
+  isActive: {
+    type: Boolean,
+    default: true,
+    index: true
+  },
+  isBlocked: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  lastLogin: {
+    type: Date,
+    default: null
+  },
+  resetPasswordToken: {
+    type: String,
+    default: null,
+    index: true
+  },
+  resetPasswordExpires: {
+    type: Date,
+    default: null
+  },
+  emailVerified: {
+    type: Boolean,
+    default: true
   },
   createdAt: {
     type: Date,

@@ -27,6 +27,21 @@ const auth = async (req, res, next) => {
       });
     }
 
+    // Check if user is active and not blocked
+    if (!user.isActive) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Your account has been deactivated. Please contact support for assistance.' 
+      });
+    }
+
+    if (user.isBlocked) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Your account has been blocked. Please contact support for assistance.' 
+      });
+    }
+
     // Add user to request object
     req.user = user;
     req.userRole = user.role;
