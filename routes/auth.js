@@ -60,6 +60,63 @@ router.post('/signup', [
 
     await user.save();
 
+    // Send welcome email
+    try {
+      const registrationTime = new Date().toLocaleString();
+      const subject = 'Welcome to Our Platform - Account Created Successfully!';
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #2563eb; text-align: center;">Welcome to Our Platform!</h2>
+          <p>Hello ${user.name},</p>
+          <p>Congratulations! Your account has been successfully created on <strong>${registrationTime}</strong>.</p>
+          
+          <div style="background-color: #f0f9ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2563eb;">
+            <h3 style="color: #1e40af; margin-top: 0;">Account Details:</h3>
+            <p><strong>Name:</strong> ${user.name}</p>
+            <p><strong>Email:</strong> ${user.email}</p>
+            <p><strong>Role:</strong> ${user.role}</p>
+            <p><strong>Registration Date:</strong> ${registrationTime}</p>
+          </div>
+
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #333; margin-top: 0;">What's Next?</h3>
+            <ul style="color: #555;">
+              <li>You can now log in to your account using your email and password</li>
+              <li>Explore all the features available to ${user.role}s</li>
+              <li>Update your profile information anytime</li>
+              <li>Contact support if you need any assistance</li>
+            </ul>
+          </div>
+
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${config.FRONTEND_URL}/login" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Login to Your Account</a>
+          </div>
+
+          <div style="background-color: #fef3c7; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+            <h4 style="color: #92400e; margin-top: 0;">🔒 Security Tips:</h4>
+            <ul style="color: #92400e; margin-bottom: 0;">
+              <li>Keep your password secure and don't share it with anyone</li>
+              <li>Log out from shared devices after use</li>
+              <li>Contact us immediately if you notice any suspicious activity</li>
+            </ul>
+          </div>
+
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="color: #666; font-size: 14px; text-align: center;">
+            Thank you for joining us! If you have any questions, feel free to contact our support team.
+          </p>
+        </div>
+      `;
+      
+      const text = `Welcome to Our Platform!\n\nHello ${user.name},\n\nCongratulations! Your account has been successfully created on ${registrationTime}.\n\nAccount Details:\n- Name: ${user.name}\n- Email: ${user.email}\n- Role: ${user.role}\n- Registration Date: ${registrationTime}\n\nWhat's Next?\n- You can now log in to your account using your email and password\n- Explore all the features available to ${user.role}s\n- Update your profile information anytime\n- Contact support if you need any assistance\n\nLogin to your account: ${config.FRONTEND_URL}/login\n\nSecurity Tips:\n- Keep your password secure and don't share it with anyone\n- Log out from shared devices after use\n- Contact us immediately if you notice any suspicious activity\n\nThank you for joining us! If you have any questions, feel free to contact our support team.`;
+      
+      await sendMail({ to: user.email, subject, html, text });
+      console.log(`Welcome email sent to ${user.email}`);
+    } catch (emailError) {
+      console.error('Failed to send welcome email:', emailError);
+      // Don't fail the registration if email sending fails
+    }
+
     // Generate JWT token
     const token = jwt.sign(
       { userId: user._id },
@@ -141,6 +198,36 @@ router.post('/login', [
     // Update last login
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
+    // Send login notification email
+    try {
+      const loginTime = new Date().toLocaleString();
+      const subject = 'Login Notification - Your Account Was Accessed';
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #2563eb; text-align: center;">Login Notification</h2>
+          <p>Hello ${user.name},</p>
+          <p>Your account was successfully accessed on <strong>${loginTime}</strong>.</p>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #333; margin-top: 0;">Login Details:</h3>
+            <p><strong>Email:</strong> ${user.email}</p>
+            <p><strong>Time:</strong> ${loginTime}</p>
+            <p><strong>Role:</strong> ${user.role}</p>
+          </div>
+          <p>If this was not you, please contact support immediately and consider changing your password.</p>
+          <p>If this was you, you can safely ignore this email.</p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="color: #666; font-size: 14px;">This is an automated security notification from your account.</p>
+        </div>
+      `;
+      const text = `Login Notification\n\nHello ${user.name},\n\nYour account was successfully accessed on ${loginTime}.\n\nLogin Details:\n- Email: ${user.email}\n- Time: ${loginTime}\n- Role: ${user.role}\n\nIf this was not you, please contact support immediately and consider changing your password.\n\nIf this was you, you can safely ignore this email.\n\nThis is an automated security notification from your account.`;
+      
+      await sendMail({ to: user.email, subject, html, text });
+      console.log(`Login notification email sent to ${user.email}`);
+    } catch (emailError) {
+      console.error('Failed to send login notification email:', emailError);
+      // Don't fail the login if email sending fails
+    }
+
     // Generate JWT token
     const token = jwt.sign(
       { userId: user._id },
@@ -206,6 +293,37 @@ router.post('/google', async (req, res) => {
     }
 
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
+
+    // Send login notification email
+    try {
+      const loginTime = new Date().toLocaleString();
+      const subject = 'Login Notification - Your Account Was Accessed';
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #2563eb; text-align: center;">Login Notification</h2>
+          <p>Hello ${user.name},</p>
+          <p>Your account was successfully accessed on <strong>${loginTime}</strong> via Google Sign-In.</p>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #333; margin-top: 0;">Login Details:</h3>
+            <p><strong>Email:</strong> ${user.email}</p>
+            <p><strong>Time:</strong> ${loginTime}</p>
+            <p><strong>Role:</strong> ${user.role}</p>
+            <p><strong>Method:</strong> Google Sign-In</p>
+          </div>
+          <p>If this was not you, please contact support immediately and consider changing your password.</p>
+          <p>If this was you, you can safely ignore this email.</p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="color: #666; font-size: 14px;">This is an automated security notification from your account.</p>
+        </div>
+      `;
+      const text = `Login Notification\n\nHello ${user.name},\n\nYour account was successfully accessed on ${loginTime} via Google Sign-In.\n\nLogin Details:\n- Email: ${user.email}\n- Time: ${loginTime}\n- Role: ${user.role}\n- Method: Google Sign-In\n\nIf this was not you, please contact support immediately and consider changing your password.\n\nIf this was you, you can safely ignore this email.\n\nThis is an automated security notification from your account.`;
+      
+      await sendMail({ to: user.email, subject, html, text });
+      console.log(`Login notification email sent to ${user.email} (Google Sign-In)`);
+    } catch (emailError) {
+      console.error('Failed to send login notification email:', emailError);
+      // Don't fail the login if email sending fails
+    }
 
     const token = jwt.sign({ userId: user._id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
     res.json({ success: true, message: 'Login successful', token, user: { id: user._id, name: user.name, email: user.email, role: user.role, createdAt: user.createdAt } });
