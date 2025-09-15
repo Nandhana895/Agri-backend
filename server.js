@@ -184,6 +184,20 @@ function startServer() {
           targetId = target._id.toString();
         }
 
+        // Gate messaging by approval when farmer -> expert
+        try {
+          const ChatRequest = require('./models/ChatRequest');
+          const senderIsFarmer = socket.user.role === 'user';
+          const targetUser = await User.findById(targetId).select('role email');
+          const targetIsExpert = targetUser?.role === 'expert';
+          if (senderIsFarmer && targetIsExpert) {
+            const approved = await ChatRequest.findOne({ farmerId: socket.user._id, expertId: targetId, status: 'approved' }).select('_id');
+            if (!approved) {
+              return typeof ack === 'function' && ack({ success: false, requiresApproval: true, message: 'Chat not approved by expert yet' });
+            }
+          }
+        } catch (_) {}
+
         // Find or create conversation
         let convo = await Conversation.findOne({ participants: { $all: [socket.user._id, targetId] } });
         if (!convo) {
