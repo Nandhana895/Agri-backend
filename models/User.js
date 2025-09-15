@@ -32,6 +32,10 @@ const userSchema = new mongoose.Schema({
     default: 'user',
     index: true
   },
+  avatarUrl: {
+    type: String,
+    default: '',
+  },
   isActive: {
     type: Boolean,
     default: true,

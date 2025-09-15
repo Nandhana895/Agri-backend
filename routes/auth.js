@@ -9,6 +9,23 @@ const config = require('../config/config');
 const router = express.Router();
 const crypto = require('crypto');
 const { sendMail } = require('../scripts/mailer');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Simple local uploads for avatars (re-uses uploads directory)
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  try { fs.mkdirSync(uploadsDir); } catch (_) {}
+}
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.jpg';
+    cb(null, `avatar_${req.user?._id || 'anon'}_${Date.now()}${ext}`);
+  }
+});
+const upload = multer({ storage });
 
 // @route   POST /api/auth/signup
 // @desc    Register a new user
@@ -349,6 +366,35 @@ router.get('/me', auth, async (req, res) => {
       success: false,
       message: 'Server error while fetching profile'
     });
+  }
+});
+
+// @route   PUT /api/auth/update-profile
+// @desc    Update current user's name only
+// @access  Private
+router.put('/update-profile', [auth, body('name').trim().isLength({ min: 2, max: 50 })], validate, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(req.user._id, { name: req.body.name }, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    res.json({ success: true, user });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ success: false, message: 'Server error while updating profile' });
+  }
+});
+
+// @route   POST /api/auth/upload-avatar
+// @desc    Upload/replace current user's avatar
+// @access  Private
+router.post('/upload-avatar', auth, upload.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    const rel = `/api/admin/uploads/${req.file.filename}`;
+    const user = await User.findByIdAndUpdate(req.user._id, { avatarUrl: rel }, { new: true }).select('-password');
+    res.json({ success: true, avatarUrl: rel, user });
+  } catch (error) {
+    console.error('Upload avatar error:', error);
+    res.status(500).json({ success: false, message: 'Server error while uploading avatar' });
   }
 });
 
