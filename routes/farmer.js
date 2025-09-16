@@ -11,6 +11,13 @@ const User = require('../models/User');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const router = express.Router();
+const multer = require('multer');
+const axios = require('axios');
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+const pdfParse = require('pdf-parse');
 
 // Dashboard endpoint
 router.get('/dashboard', auth, async (req, res) => {
@@ -602,6 +609,157 @@ router.post('/ai/crop-recommendation', auth, [
   } catch (e) {
     console.error('AI crop recommendation error:', e);
     return res.status(500).json({ success: false, message: 'AI recommendation failed' });
+  }
+});
+
+// OCR PDF -> Summary
+router.post('/ocr/pdf-summary', auth, uploadMemory.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
+    }
+    const mime = req.file.mimetype || '';
+    if (mime !== 'application/pdf') {
+      return res.status(400).json({ success: false, message: 'Only PDF files are supported' });
+    }
+
+    // First-pass: try local text extraction (works for many digital PDFs)
+    let text = '';
+    try {
+      const parsed = await pdfParse(req.file.buffer);
+      text = String(parsed.text || '').trim();
+    } catch (_) {
+      text = '';
+    }
+
+    // Fallback to OCR API only if needed
+    if (!text) {
+      const apiKey = process.env.OCR_API_KEY || 'K81457044988957';
+      const base64 = `data:application/pdf;base64,${req.file.buffer.toString('base64')}`;
+
+      const params = new URLSearchParams();
+      params.append('base64Image', base64);
+      params.append('language', 'eng');
+      params.append('isOverlayRequired', 'false');
+      params.append('OCREngine', '2');
+
+      const { data } = await axios.post('https://api.ocr.space/parse/image', params, {
+        headers: {
+          'apikey': apiKey,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        timeout: 90000
+      });
+
+      if (!data || data.IsErroredOnProcessing) {
+        const msg = data?.ErrorMessage || data?.ErrorDetails || 'OCR processing failed';
+        return res.status(502).json({ success: false, message: Array.isArray(msg) ? msg.join(', ') : msg });
+      }
+
+      const ocrParsed = Array.isArray(data.ParsedResults) ? data.ParsedResults : [];
+      text = String(ocrParsed[0]?.ParsedText || '').trim();
+    }
+    if (!text) {
+      return res.status(200).json({ success: true, summary: 'No recognizable text found in the PDF.', text: '' });
+    }
+
+    // Sentence segmentation and normalization
+    const sentences = text
+      .replace(/\r/g, ' ')
+      .replace(/\s+/g, ' ')
+      .split(/(?<=[.!?])\s+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0 && /[a-zA-Z]/.test(s));
+
+    // Keep uniqueness cap to reduce verbosity
+    const unique = [];
+    const seen = new Set();
+    for (const s of sentences) {
+      const k = s.toLowerCase().replace(/[^a-z0-9\s]/g, '').slice(0, 140);
+      if (!seen.has(k)) { seen.add(k); unique.push(s); }
+      if (unique.length >= 60) break;
+    }
+
+    // Keywords that matter for soil reports
+    const keywords = ['ph', 'nitrogen', 'phosphorus', 'potassium', 'organic', 'moisture', 'recommend', 'apply', 'dose', 'result', 'conclusion', 'summary', 'soil', 'nutrient', 'deficien', 'excess', 'kg', 'ppm', 'mg'];
+
+    // Score sentences: prefer keyword presence, medium length, contains numbers, avoids boilerplate
+    const scoreSentence = (s) => {
+      const lower = s.toLowerCase();
+      let score = 0;
+      for (const kw of keywords) if (lower.includes(kw)) score += 12;
+      if (/[0-9]/.test(s)) score += 8;
+      // Prefer concise (10-220 chars), penalize too short/long
+      const len = s.length;
+      if (len >= 60 && len <= 180) score += 14;
+      else if (len >= 35 && len < 60) score += 8;
+      else if (len > 220) score -= 10;
+      // Mild boost for colon-separated findings
+      if (s.includes(':')) score += 4;
+      // Penalize headers/metadata
+      if (/^(report|date|sample|lab|page|ref|id)\b/i.test(s)) score -= 15;
+      return score;
+    };
+
+    // Simplify jargon to layperson wording
+    const simplify = (s) => {
+      const replacements = [
+        [/deficien\w*/gi, 'low'],
+        [/excess/gi, 'high'],
+        [/application/gi, 'use'],
+        [/administer/gi, 'use'],
+        [/amendment/gi, 'improvement'],
+        [/recommendation/gi, 'recommendation'],
+        [/utili[sz]e/gi, 'use'],
+        [/optimal/gi, 'ideal'],
+        [/parameters?/gi, 'levels'],
+        [/concentration/gi, 'level'],
+        [/ppm\b/gi, 'parts per million'],
+        [/mg\/?kg/gi, 'mg per kg'],
+        [/kg\/?ha/gi, 'kg per hectare'],
+        [/\bph\b/gi, 'pH'],
+      ];
+      let out = s;
+      for (const [re, to] of replacements) out = out.replace(re, to);
+      // Trim and normalize spacing/punctuation
+      out = out.replace(/\s+/g, ' ').trim();
+      // Keep sentences short and clear
+      if (out.length > 180) out = out.slice(0, 177).replace(/[,:;\-\s]+$/,'').trim() + '...';
+      // Capitalize first letter
+      out = out.charAt(0).toUpperCase() + out.slice(1);
+      // Remove trailing repeated punctuation
+      out = out.replace(/[.!?]+$/,'');
+      return out;
+    };
+
+    // Rank and pick top 3–5 sentences
+    const ranked = unique
+      .map(s => ({ s, score: scoreSentence(s) }))
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.s);
+
+    const picked = [];
+    const usedStarts = new Set();
+    for (const s of ranked) {
+      const simple = simplify(s);
+      const startKey = simple.slice(0, 24).toLowerCase();
+      if (usedStarts.has(startKey)) continue;
+      usedStarts.add(startKey);
+      picked.push(simple);
+      if (picked.length >= 5) break;
+    }
+
+    if (picked.length === 0) picked.push('No clear findings extracted from the document.');
+
+    // Format as concise, professional bullet points
+    const summary = picked.slice(0, Math.min(5, Math.max(3, picked.length)))
+      .map(line => `- ${line}`)
+      .join('\n');
+
+    return res.json({ success: true, summary, text });
+  } catch (e) {
+    console.error('OCR PDF summary error:', e?.response?.data || e);
+    return res.status(500).json({ success: false, message: 'OCR failed. Please try again later.' });
   }
 });
 
