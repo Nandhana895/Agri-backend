@@ -13,6 +13,7 @@ const User = require('./models/User');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const farmerRoutes = require('./routes/farmer');
+const expertRoutes = require('./routes/expert');
 const chatRoutes = require('./routes/chat');
 const path = require('path');
 const Conversation = require('./models/Conversation');
@@ -99,6 +100,7 @@ mongoose.connection.on('disconnected', () => {
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/farmer', farmerRoutes);
+app.use('/api/expert', expertRoutes);
 app.use('/api/chat', chatRoutes);
 
 // Health check endpoint

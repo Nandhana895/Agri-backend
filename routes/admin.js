@@ -3,6 +3,7 @@ const auth = require('../middleware/auth');
 const User = require('../models/User');
 const ActionLog = require('../models/ActionLog');
 const CropProfile = require('../models/CropProfile');
+const CropCalendar = require('../models/CropCalendar');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -551,4 +552,236 @@ router.delete('/crops/:id', auth, auth.requireAdmin, async (req, res) => {
 		res.status(500).json({ success: false, message: 'Server error' });
 	}
 });
+
+// Admin: CropCalendar CRUD operations
+router.get('/sowing-calendar', auth, auth.requireAdmin, async (req, res) => {
+	try {
+		const limit = Math.min(Number(req.query.limit) || 50, 200);
+		const page = Math.max(Number(req.query.page) || 1, 1);
+		const skip = (page - 1) * limit;
+		
+		// Build search filter
+		const search = req.query.search;
+		const filter = {};
+		if (search) {
+			filter.$or = [
+				{ crop: { $regex: search, $options: 'i' } },
+				{ region: { $regex: search, $options: 'i' } },
+				{ season: { $regex: search, $options: 'i' } }
+			];
+		}
+		
+		const [records, total] = await Promise.all([
+			CropCalendar.find(filter)
+				.sort({ lastUpdated: -1 })
+				.skip(skip)
+				.limit(limit),
+			CropCalendar.countDocuments(filter)
+		]);
+		
+		res.json({ 
+			success: true, 
+			records,
+			pagination: {
+				page,
+				limit,
+				total,
+				pages: Math.ceil(total / limit)
+			}
+		});
+	} catch (error) {
+		console.error('Admin list sowing calendar error:', error);
+		res.status(500).json({ success: false, message: 'Server error' });
+	}
+});
+
+router.get('/sowing-calendar/:id', auth, auth.requireAdmin, async (req, res) => {
+	try {
+		const record = await CropCalendar.findById(req.params.id);
+		
+		if (!record) {
+			return res.status(404).json({ success: false, message: 'Sowing calendar record not found' });
+		}
+		
+		res.json({ success: true, record });
+	} catch (error) {
+		console.error('Admin get sowing calendar error:', error);
+		res.status(500).json({ success: false, message: 'Server error' });
+	}
+});
+
+router.post('/sowing-calendar', auth, auth.requireAdmin, async (req, res) => {
+	try {
+		const { crop, season, startMonth, endMonth, region, agroZone, notes, varieties, source } = req.body;
+		
+		// Validate required fields
+		if (!crop || !season || !startMonth || !endMonth) {
+			return res.status(400).json({ 
+				success: false, 
+				message: 'Crop, season, startMonth, and endMonth are required' 
+			});
+		}
+		
+		// Validate season
+		if (!['Kharif', 'Rabi', 'Zaid'].includes(season)) {
+			return res.status(400).json({ 
+				success: false, 
+				message: 'Season must be one of: Kharif, Rabi, Zaid' 
+			});
+		}
+		
+		// Ensure normalized field present to satisfy schema requirement
+		const cropLower = String(crop).toLowerCase().trim();
+		
+		const record = await CropCalendar.create({
+			crop,
+			crop_lower: cropLower,
+			season,
+			startMonth,
+			endMonth,
+			region: region || 'all',
+			agroZone,
+			notes,
+			varieties: varieties || [],
+			source,
+			lastUpdated: new Date(),
+			version: 1
+		});
+		
+		await ActionLog.create({ 
+			actor: req.user._id, 
+			action: 'sowing_calendar_create', 
+			targetType: 'CropCalendar', 
+			targetId: record._id.toString(),
+			meta: { crop, season, region }
+		});
+		
+		res.status(201).json({ success: true, record });
+	} catch (error) {
+		console.error('Admin create sowing calendar error:', error);
+		res.status(500).json({ success: false, message: 'Server error' });
+	}
+});
+
+router.put('/sowing-calendar/:id', auth, auth.requireAdmin, async (req, res) => {
+	try {
+		const { crop, season, startMonth, endMonth, region, agroZone, notes, varieties, source } = req.body;
+		
+		// Validate season if provided
+		if (season && !['Kharif', 'Rabi', 'Zaid'].includes(season)) {
+			return res.status(400).json({ 
+				success: false, 
+				message: 'Season must be one of: Kharif, Rabi, Zaid' 
+			});
+		}
+		
+		// Get current record for versioning
+		const currentRecord = await CropCalendar.findById(req.params.id);
+		if (!currentRecord) {
+			return res.status(404).json({ success: false, message: 'Sowing calendar record not found' });
+		}
+		
+		const updateData = {
+			lastUpdated: new Date(),
+			version: currentRecord.version + 1
+		};
+		
+		if (crop !== undefined) updateData.crop = crop;
+		if (season !== undefined) updateData.season = season;
+		if (startMonth !== undefined) updateData.startMonth = startMonth;
+		if (endMonth !== undefined) updateData.endMonth = endMonth;
+		if (region !== undefined) updateData.region = region;
+		if (agroZone !== undefined) updateData.agroZone = agroZone;
+		if (notes !== undefined) updateData.notes = notes;
+		if (varieties !== undefined) updateData.varieties = varieties;
+		if (source !== undefined) updateData.source = source;
+		
+		const record = await CropCalendar.findByIdAndUpdate(
+			req.params.id,
+			updateData,
+			{ new: true }
+		);
+		
+		await ActionLog.create({ 
+			actor: req.user._id, 
+			action: 'sowing_calendar_update', 
+			targetType: 'CropCalendar', 
+			targetId: req.params.id,
+			meta: { 
+				crop: record.crop, 
+				season: record.season, 
+				region: record.region,
+				version: record.version,
+				changes: Object.keys(updateData).filter(key => key !== 'lastUpdated' && key !== 'version')
+			}
+		});
+		
+		res.json({ success: true, record });
+	} catch (error) {
+		console.error('Admin update sowing calendar error:', error);
+		res.status(500).json({ success: false, message: 'Server error' });
+	}
+});
+
+router.delete('/sowing-calendar/:id', auth, auth.requireAdmin, async (req, res) => {
+	try {
+		const record = await CropCalendar.findById(req.params.id);
+		if (!record) {
+			return res.status(404).json({ success: false, message: 'Sowing calendar record not found' });
+		}
+		
+		await CropCalendar.findByIdAndDelete(req.params.id);
+		
+		await ActionLog.create({ 
+			actor: req.user._id, 
+			action: 'sowing_calendar_delete', 
+			targetType: 'CropCalendar', 
+			targetId: req.params.id,
+			meta: { crop: record.crop, season: record.season, region: record.region }
+		});
+		
+		res.json({ success: true, message: 'Sowing calendar record deleted successfully' });
+	} catch (error) {
+		console.error('Admin delete sowing calendar error:', error);
+		res.status(500).json({ success: false, message: 'Server error' });
+	}
+});
+
+// Admin: Bulk operations for sowing calendar
+router.post('/sowing-calendar/bulk', auth, auth.requireAdmin, async (req, res) => {
+	try {
+		const { action, recordIds } = req.body;
+		
+		if (!['delete', 'update'].includes(action)) {
+			return res.status(400).json({ success: false, message: 'Invalid action' });
+		}
+		
+		if (!Array.isArray(recordIds) || recordIds.length === 0) {
+			return res.status(400).json({ success: false, message: 'Record IDs are required' });
+		}
+		
+		let result;
+		if (action === 'delete') {
+			result = await CropCalendar.deleteMany({ _id: { $in: recordIds } });
+		}
+		
+		await ActionLog.create({ 
+			actor: req.user._id, 
+			action: `sowing_calendar_bulk_${action}`, 
+			targetType: 'CropCalendar', 
+			targetId: recordIds.join(','),
+			meta: { count: result?.deletedCount || 0 }
+		});
+		
+		res.json({ 
+			success: true, 
+			message: `Bulk ${action} completed`,
+			affected: result?.deletedCount || 0
+		});
+	} catch (error) {
+		console.error('Admin bulk sowing calendar error:', error);
+		res.status(500).json({ success: false, message: 'Server error' });
+	}
+});
+
 module.exports = router;

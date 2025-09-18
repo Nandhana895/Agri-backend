@@ -1,5 +1,6 @@
 const express = require('express');
 const { body } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 
@@ -7,6 +8,7 @@ const CropRecommendation = require('../models/CropRecommendation');
 const SoilAnalysis = require('../models/SoilAnalysis');
 const FertilizerPlan = require('../models/FertilizerPlan');
 const CropProfile = require('../models/CropProfile');
+const CropCalendar = require('../models/CropCalendar');
 const User = require('../models/User');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
@@ -18,6 +20,18 @@ const uploadMemory = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
 const pdfParse = require('pdf-parse');
+
+// Rate limiting for sowing calendar endpoint
+const sowingCalendarRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30, // limit each IP to 30 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many requests for sowing calendar. Please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Dashboard endpoint
 router.get('/dashboard', auth, async (req, res) => {
@@ -519,6 +533,136 @@ router.get('/experts', auth, async (req, res) => {
   } catch (e) {
     console.error('List experts error:', e);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Sowing Calendar endpoint with sophisticated matching logic
+router.get('/sowing-calendar', auth, sowingCalendarRateLimit, async (req, res) => {
+  try {
+    const { crop, region, season } = req.query;
+
+    // Validate required parameters
+    if (!crop) {
+      return res.status(400).json({
+        success: false,
+        message: 'Crop parameter is required. Please specify the crop name.'
+      });
+    }
+
+    // Normalize crop name (lowercase)
+    const normalizedCrop = crop.toLowerCase().trim();
+    
+    // Build base query with crop matching
+    let query = {
+      crop_lower: { $regex: normalizedCrop, $options: 'i' }
+    };
+
+    // Add season filter if provided
+    if (season) {
+      const validSeasons = ['Kharif', 'Rabi', 'Zaid'];
+      if (!validSeasons.includes(season)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid season. Must be one of: Kharif, Rabi, Zaid'
+        });
+      }
+      query.season = season;
+    }
+
+    // Priority-based matching logic
+    let results = [];
+    let matchExplanation = '';
+
+    if (region) {
+      // Priority 1: Exact crop + region match
+      const exactRegionMatch = await CropCalendar.find({
+        ...query,
+        region: region
+      }).sort({ lastUpdated: -1 });
+
+      if (exactRegionMatch.length > 0) {
+        results = exactRegionMatch;
+        matchExplanation = `Found ${exactRegionMatch.length} exact match(es) for "${crop}" in region "${region}"`;
+      } else {
+        // Priority 2: Crop + agroZone match (if user's agroZone is known)
+        // For now, we'll try common agroZones
+        const commonAgroZones = ['humid', 'arid', 'temperate', 'semi-arid'];
+        let agroZoneMatch = [];
+        
+        for (const zone of commonAgroZones) {
+          const zoneResults = await CropCalendar.find({
+            ...query,
+            agroZone: zone
+          }).sort({ lastUpdated: -1 });
+          
+          if (zoneResults.length > 0) {
+            agroZoneMatch = zoneResults;
+            matchExplanation = `Found ${zoneResults.length} match(es) for "${crop}" in agro-zone "${zone}" (region-specific data not available)`;
+            break;
+          }
+        }
+
+        if (agroZoneMatch.length > 0) {
+          results = agroZoneMatch;
+        } else {
+          // Priority 3: Fallback to crop + region: "all" or general records
+          const fallbackMatch = await CropCalendar.find({
+            ...query,
+            $or: [
+              { region: 'all' },
+              { region: { $exists: false } }
+            ]
+          }).sort({ lastUpdated: -1 });
+
+          if (fallbackMatch.length > 0) {
+            results = fallbackMatch;
+            matchExplanation = `Found ${fallbackMatch.length} general match(es) for "${crop}" (no region-specific data available)`;
+          }
+        }
+      }
+    } else {
+      // No region specified - get all matches for the crop
+      results = await CropCalendar.find(query).sort({ lastUpdated: -1 });
+      matchExplanation = `Found ${results.length} match(es) for "${crop}" across all regions`;
+    }
+
+    // If no results found
+    if (results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No calendar found for this crop in your region. Please contact local agri-office.'
+      });
+    }
+
+    // Format response data
+    const formattedResults = results.map(record => ({
+      crop: record.crop,
+      season: record.season,
+      startMonth: record.startMonth,
+      endMonth: record.endMonth,
+      region: record.region,
+      agroZone: record.agroZone,
+      varieties: record.varieties || [],
+      notes: record.notes || '',
+      source: record.source || '',
+      lastUpdated: record.lastUpdated
+    }));
+
+    // Add match explanation to response
+    const response = {
+      results: formattedResults,
+      matchExplanation,
+      totalMatches: formattedResults.length
+    };
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Sowing calendar error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch sowing calendar data. Please try again later.'
+    });
   }
 });
 
