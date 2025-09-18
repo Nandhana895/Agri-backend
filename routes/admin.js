@@ -497,11 +497,28 @@ router.get('/crops', auth, auth.requireAdmin, async (req, res) => {
 
 router.post('/crops', auth, auth.requireAdmin, async (req, res) => {
 	try {
-		const { name, description = '', cultivationTips = [], imageUrl = '' } = req.body;
+		const { 
+			name, 
+			name_ml = '', 
+			description = '', 
+			description_ml = '', 
+			cultivationTips = [], 
+			cultivationTips_ml = [], 
+			imageUrl = '' 
+		} = req.body;
 		if (!name) {
 			return res.status(400).json({ success: false, message: 'Crop name is required' });
 		}
-		const crop = await CropProfile.create({ name, description, cultivationTips, imageUrl, createdBy: req.user._id });
+		const crop = await CropProfile.create({ 
+			name, 
+			name_ml, 
+			description, 
+			description_ml, 
+			cultivationTips, 
+			cultivationTips_ml, 
+			imageUrl, 
+			createdBy: req.user._id 
+		});
 		await ActionLog.create({ actor: req.user._id, action: 'crop_create', targetType: 'CropProfile', targetId: crop._id.toString() });
 		res.status(201).json({ success: true, crop });
 	} catch (error) {
@@ -525,11 +542,14 @@ router.post('/crops/:id/image', auth, auth.requireAdmin, upload.single('image'),
 
 router.put('/crops/:id', auth, auth.requireAdmin, async (req, res) => {
 	try {
-		const { name, description, cultivationTips, imageUrl } = req.body;
+		const { name, name_ml, description, description_ml, cultivationTips, cultivationTips_ml, imageUrl } = req.body;
 		const update = {};
 		if (name !== undefined) update.name = name;
+		if (name_ml !== undefined) update.name_ml = name_ml;
 		if (description !== undefined) update.description = description;
+		if (description_ml !== undefined) update.description_ml = description_ml;
 		if (cultivationTips !== undefined) update.cultivationTips = cultivationTips;
+		if (cultivationTips_ml !== undefined) update.cultivationTips_ml = cultivationTips_ml;
 		if (imageUrl !== undefined) update.imageUrl = imageUrl;
 		const crop = await CropProfile.findByIdAndUpdate(req.params.id, update, { new: true });
 		if (!crop) return res.status(404).json({ success: false, message: 'Crop not found' });

@@ -7,6 +7,11 @@ const cropProfileSchema = new mongoose.Schema({
     trim: true,
     index: true
   },
+  name_ml: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   imageUrl: {
     type: String,
     default: ''
@@ -15,7 +20,15 @@ const cropProfileSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  description_ml: {
+    type: String,
+    default: ''
+  },
   cultivationTips: {
+    type: [String],
+    default: []
+  },
+  cultivationTips_ml: {
     type: [String],
     default: []
   },
