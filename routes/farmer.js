@@ -10,6 +10,7 @@ const FertilizerPlan = require('../models/FertilizerPlan');
 const CropProfile = require('../models/CropProfile');
 const CropCalendar = require('../models/CropCalendar');
 const User = require('../models/User');
+const ActionLog = require('../models/ActionLog');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const router = express.Router();
@@ -453,7 +454,7 @@ router.get('/reports', auth, async (req, res) => {
 });
 
 router.post('/reports/generate', auth, [
-  body('type').isIn(['summary', 'soil', 'crops'])
+  body('type').isIn(['summary', 'soil', 'crops', 'sowing_calendar'])
 ], validate, async (req, res) => {
   try {
     const { type } = req.body;
@@ -503,6 +504,14 @@ router.post('/reports/generate', auth, [
           recommendations
         };
         break;
+      case 'sowing_calendar':
+        reportName = `Sowing Calendar - ${new Date().toLocaleDateString()}`;
+        reportData = {
+          farmer: req.user.name,
+          generatedAt: new Date(),
+          ...(req.body?.data || {})
+        };
+        break;
     }
     
     // In a real app, you would generate a PDF here
@@ -523,6 +532,23 @@ router.post('/reports/generate', auth, [
   }
 });
 
+// Farm Logbook: store simple log entries (uses ActionLog as storage)
+router.post('/log', auth, async (req, res) => {
+  try {
+    const entry = await ActionLog.create({
+      actor: req.user._id,
+      action: 'logbook_add',
+      targetType: req.body?.type || 'log',
+      targetId: '',
+      meta: { ...(req.body || {}) }
+    });
+    return res.status(201).json({ success: true, id: entry._id });
+  } catch (e) {
+    console.error('Add to logbook error:', e);
+    return res.status(500).json({ success: false, message: 'Failed to add to logbook' });
+  }
+});
+
 // Experts list for farmers to initiate chats
 router.get('/experts', auth, async (req, res) => {
   try {
@@ -539,7 +565,22 @@ router.get('/experts', auth, async (req, res) => {
 // Sowing Calendar endpoint with sophisticated matching logic
 router.get('/sowing-calendar', auth, sowingCalendarRateLimit, async (req, res) => {
   try {
-    const { crop, region, season } = req.query;
+    const { crop, region: regionParam, season, list } = req.query;
+
+    // Support listing crops for dropdowns
+    if (String(list) === 'true') {
+      try {
+        const regionForList = regionParam || req.user?.region || null;
+        const listQuery = {};
+        if (regionForList && regionForList !== 'all') {
+          listQuery.$or = [{ region: regionForList }, { region: 'all' }];
+        }
+        const crops = await CropCalendar.distinct('crop', listQuery);
+        return res.json({ success: true, crops: Array.isArray(crops) ? crops.sort() : [] });
+      } catch (_) {
+        return res.json({ success: true, crops: [] });
+      }
+    }
 
     // Validate required parameters
     if (!crop) {
@@ -568,6 +609,9 @@ router.get('/sowing-calendar', auth, sowingCalendarRateLimit, async (req, res) =
       }
       query.season = season;
     }
+
+    // Determine region using param or user profile
+    const region = regionParam || req.user?.region || undefined;
 
     // Priority-based matching logic
     let results = [];
