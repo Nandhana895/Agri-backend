@@ -21,6 +21,7 @@ const uploadMemory = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
 const pdfParse = require('pdf-parse');
+const Scheme = require('../models/Scheme');
 
 // Rate limiting for sowing calendar endpoint
 const sowingCalendarRateLimit = rateLimit({
@@ -952,3 +953,59 @@ router.post('/ocr/pdf-summary', auth, uploadMemory.single('file'), async (req, r
 });
 
 module.exports = router;
+// Government Schemes: filter by crop and region
+router.get('/schemes', auth, async (req, res) => {
+  try {
+    let { crop, region } = req.query;
+    const filters = {};
+
+    if (crop) {
+      const c = String(crop).trim();
+      filters.$or = [
+        { crop: c },
+        { crop: { $in: ['All', 'all', 'ALL', 'All Crops'] } }
+      ];
+    }
+
+    if (region) {
+      const r = String(region).trim();
+      const or = filters.$or || [];
+      or.push({ region: r });
+      or.push({ region: { $in: ['All', 'all', 'ALL', 'All India'] } });
+      filters.$or = or;
+    }
+
+    // If neither filter provided, show latest general schemes
+    const today = new Date();
+    const query = Object.keys(filters).length ? filters : {};
+    // Auto-hide expired schemes
+    query.$or = [
+      ...(Array.isArray(query.$or) ? query.$or : []),
+      { endDate: { $exists: false } },
+      { endDate: null },
+      { endDate: { $gte: today } }
+    ];
+    const list = await Scheme.find(query).sort({ lastUpdated: -1 }).limit(100);
+
+    if (!list || list.length === 0) {
+      return res.status(200).json({ message: 'No schemes available for your crop/region.' });
+    }
+
+    const results = list.map(s => ({
+      title: s.title,
+      crop: s.crop,
+      region: s.region,
+      category: s.category,
+      eligibility: s.eligibility,
+      benefits: s.benefits,
+      howToApply: s.howToApply,
+      source: s.source,
+      lastUpdated: s.lastUpdated
+    }));
+
+    return res.json(results);
+  } catch (e) {
+    console.error('Farmer schemes error:', e);
+    return res.status(500).json({ success: false, message: 'Failed to fetch schemes' });
+  }
+});

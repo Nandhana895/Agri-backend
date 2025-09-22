@@ -4,6 +4,7 @@ const User = require('../models/User');
 const ActionLog = require('../models/ActionLog');
 const CropProfile = require('../models/CropProfile');
 const CropCalendar = require('../models/CropCalendar');
+const Scheme = require('../models/Scheme');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -805,3 +806,107 @@ router.post('/sowing-calendar/bulk', auth, auth.requireAdmin, async (req, res) =
 });
 
 module.exports = router;
+// Admin: list schemes
+router.get('/schemes', auth, auth.requireAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const skip = (page - 1) * limit;
+    const search = String(req.query.search || '').trim();
+    const includeExpired = String(req.query.includeExpired || 'false') === 'true';
+
+    const filter = {};
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { eligibility: { $regex: search, $options: 'i' } },
+        { benefits: { $regex: search, $options: 'i' } }
+      ];
+    }
+    if (!includeExpired) {
+      const today = new Date();
+      filter.$or = [ ...(filter.$or || []), { endDate: { $exists: false } }, { endDate: null }, { endDate: { $gte: today } } ];
+    }
+
+    const [schemes, total] = await Promise.all([
+      Scheme.find(filter).sort({ lastUpdated: -1 }).skip(skip).limit(limit),
+      Scheme.countDocuments(filter)
+    ]);
+
+    return res.json({ success: true, schemes, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+  } catch (error) {
+    console.error('Admin list schemes error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+// Admin: Government Schemes CRUD
+router.post('/schemes', auth, auth.requireAdmin, async (req, res) => {
+  try {
+    const { title, crop = [], region = [], category = 'Other', eligibility = '', benefits = '', howToApply = '', startDate = null, endDate = null, source = '' } = req.body || {};
+    if (!title) return res.status(400).json({ success: false, message: 'Scheme title is required' });
+    const doc = await Scheme.create({ title, crop, region, category, eligibility, benefits, howToApply, startDate, endDate, source, lastUpdated: new Date() });
+    await ActionLog.create({ actor: req.user._id, action: 'scheme_create', targetType: 'Scheme', targetId: doc._id.toString(), meta: { title, category } });
+    return res.status(201).json({ success: true, scheme: doc });
+  } catch (error) {
+    console.error('Admin create scheme error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.put('/schemes/:id', auth, auth.requireAdmin, async (req, res) => {
+  try {
+    const update = { ...req.body, lastUpdated: new Date() };
+    const doc = await Scheme.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!doc) return res.status(404).json({ success: false, message: 'Scheme not found' });
+    await ActionLog.create({ actor: req.user._id, action: 'scheme_update', targetType: 'Scheme', targetId: req.params.id, meta: { fields: Object.keys(req.body || {}) } });
+    return res.json({ success: true, scheme: doc });
+  } catch (error) {
+    console.error('Admin update scheme error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+router.delete('/schemes/:id', auth, auth.requireAdmin, async (req, res) => {
+  try {
+    const doc = await Scheme.findByIdAndDelete(req.params.id);
+    if (!doc) return res.status(404).json({ success: false, message: 'Scheme not found' });
+    await ActionLog.create({ actor: req.user._id, action: 'scheme_delete', targetType: 'Scheme', targetId: req.params.id, meta: { title: doc.title } });
+    return res.json({ success: true, message: 'Scheme deleted' });
+  } catch (error) {
+    console.error('Admin delete scheme error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Admin: bulk upload schemes (JSON or CSV)
+router.post('/schemes/bulk', auth, auth.requireAdmin, async (req, res) => {
+  try {
+    const { format = 'json', data } = req.body || {};
+    if (!data) return res.status(400).json({ success: false, message: 'No data provided' });
+    let items = [];
+    if (format === 'csv') {
+      // Very simple CSV parser: expects headers matching fields
+      const lines = String(data).split(/\r?\n/).filter(Boolean);
+      const headers = (lines.shift() || '').split(',').map(h => h.trim());
+      for (const line of lines) {
+        const cells = line.split(',');
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = cells[i] || ''; });
+        // Normalize arrays for crop/region if provided as semicolon-separated
+        if (typeof obj.crop === 'string') obj.crop = obj.crop.split(';').map(s => s.trim()).filter(Boolean);
+        if (typeof obj.region === 'string') obj.region = obj.region.split(';').map(s => s.trim()).filter(Boolean);
+        items.push(obj);
+      }
+    } else {
+      items = Array.isArray(data) ? data : JSON.parse(data);
+    }
+    items = items.filter(it => it && it.title);
+    if (items.length === 0) return res.status(400).json({ success: false, message: 'No valid items to import' });
+    const inserted = await Scheme.insertMany(items.map(it => ({ ...it, lastUpdated: new Date() })), { ordered: false });
+    await ActionLog.create({ actor: req.user._id, action: 'scheme_bulk_upload', targetType: 'Scheme', targetId: '', meta: { count: inserted.length } });
+    return res.status(201).json({ success: true, inserted: inserted.length });
+  } catch (error) {
+    console.error('Admin bulk upload schemes error:', error);
+    return res.status(500).json({ success: false, message: 'Bulk upload failed' });
+  }
+});
