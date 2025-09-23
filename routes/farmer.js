@@ -11,6 +11,7 @@ const CropProfile = require('../models/CropProfile');
 const CropCalendar = require('../models/CropCalendar');
 const User = require('../models/User');
 const ActionLog = require('../models/ActionLog');
+const FarmLog = require('../models/FarmLog');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const router = express.Router();
@@ -949,6 +950,206 @@ router.post('/ocr/pdf-summary', auth, uploadMemory.single('file'), async (req, r
   } catch (e) {
     console.error('OCR PDF summary error:', e?.response?.data || e);
     return res.status(500).json({ success: false, message: 'OCR failed. Please try again later.' });
+  }
+});
+
+// Farm Logbook Routes
+// POST /api/farmer/logs - Add new log entry
+router.post('/logs', auth, [
+  body('date').isISO8601().withMessage('Date must be a valid ISO 8601 date'),
+  body('activityType').isIn(['Sowing', 'Irrigation', 'Fertilizer', 'Harvesting', 'Government Scheme', 'Other']).withMessage('Invalid activity type'),
+  body('crop').optional().isString().trim().isLength({ max: 100 }).withMessage('Crop name cannot exceed 100 characters'),
+  body('notes').optional().isString().trim().isLength({ max: 500 }).withMessage('Notes cannot exceed 500 characters')
+], validate, async (req, res) => {
+  try {
+    const { date, activityType, crop, notes } = req.body;
+    
+    const logEntry = await FarmLog.create({
+      farmerId: req.user._id,
+      date: new Date(date),
+      activityType,
+      crop: crop || undefined,
+      notes: notes || undefined
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Farm log entry added successfully',
+      data: logEntry
+    });
+  } catch (error) {
+    console.error('Add farm log error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add farm log entry'
+    });
+  }
+});
+
+// GET /api/farmer/logs - Fetch farmer's log entries with filters
+router.get('/logs', auth, async (req, res) => {
+  try {
+    const { activityType, crop, startDate, endDate, limit = 50 } = req.query;
+    
+    const filters = {};
+    if (activityType) filters.activityType = activityType;
+    if (crop) filters.crop = crop;
+    if (startDate && endDate) {
+      filters.startDate = startDate;
+      filters.endDate = endDate;
+    }
+    filters.limit = parseInt(limit);
+
+    const logs = await FarmLog.getFilteredLogs(req.user._id, filters);
+    
+    res.json({
+      success: true,
+      data: {
+        logs,
+        total: logs.length,
+        filters: {
+          activityType: activityType || null,
+          crop: crop || null,
+          dateRange: startDate && endDate ? { startDate, endDate } : null
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get farm logs error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch farm logs'
+    });
+  }
+});
+
+// PUT /api/farmer/logs/:id - Edit a log entry
+router.put('/logs/:id', auth, [
+  body('date').optional().isISO8601().withMessage('Date must be a valid ISO 8601 date'),
+  body('activityType').optional().isIn(['Sowing', 'Irrigation', 'Fertilizer', 'Harvesting', 'Government Scheme', 'Other']).withMessage('Invalid activity type'),
+  body('crop').optional().isString().trim().isLength({ max: 100 }).withMessage('Crop name cannot exceed 100 characters'),
+  body('notes').optional().isString().trim().isLength({ max: 500 }).withMessage('Notes cannot exceed 500 characters')
+], validate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+    
+    // Remove undefined values
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] === undefined || updateData[key] === '') {
+        delete updateData[key];
+      }
+    });
+
+    if (updateData.date) {
+      updateData.date = new Date(updateData.date);
+    }
+
+    const logEntry = await FarmLog.findOneAndUpdate(
+      { _id: id, farmerId: req.user._id },
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!logEntry) {
+      return res.status(404).json({
+        success: false,
+        message: 'Farm log entry not found or you do not have permission to edit it'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Farm log entry updated successfully',
+      data: logEntry
+    });
+  } catch (error) {
+    console.error('Update farm log error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update farm log entry'
+    });
+  }
+});
+
+// DELETE /api/farmer/logs/:id - Delete a log entry
+router.delete('/logs/:id', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const logEntry = await FarmLog.findOneAndDelete({
+      _id: id,
+      farmerId: req.user._id
+    });
+
+    if (!logEntry) {
+      return res.status(404).json({
+        success: false,
+        message: 'Farm log entry not found or you do not have permission to delete it'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Farm log entry deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete farm log error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete farm log entry'
+    });
+  }
+});
+
+// GET /api/farmer/logs/stats - Get farm log statistics
+router.get('/logs/stats', auth, async (req, res) => {
+  try {
+    const farmerId = req.user._id;
+    
+    // Get total logs count
+    const totalLogs = await FarmLog.countDocuments({ farmerId });
+    
+    // Get logs by activity type
+    const activityStats = await FarmLog.aggregate([
+      { $match: { farmerId: new mongoose.Types.ObjectId(farmerId) } },
+      { $group: { _id: '$activityType', count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]);
+    
+    // Get logs by crop
+    const cropStats = await FarmLog.aggregate([
+      { $match: { farmerId: new mongoose.Types.ObjectId(farmerId), crop: { $exists: true, $ne: null } } },
+      { $group: { _id: '$crop', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ]);
+    
+    // Get recent activity (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    const recentActivity = await FarmLog.countDocuments({
+      farmerId,
+      date: { $gte: thirtyDaysAgo }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        totalLogs,
+        activityStats,
+        cropStats,
+        recentActivity,
+        period: '30 days'
+      }
+    });
+  } catch (error) {
+    console.error('Get farm log stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch farm log statistics'
+    });
   }
 });
 
