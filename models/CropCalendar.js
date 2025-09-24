@@ -5,7 +5,7 @@ const cropCalendarSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Crop name is required'],
     trim: true,
-    index: true
+    // Single-field index removed to avoid duplication with compound indexes
   },
   crop_lower: {
     type: String,
@@ -37,7 +37,7 @@ const cropCalendarSchema = new mongoose.Schema({
     type: String,
     default: 'all',
     trim: true,
-    index: true
+    // Single-field index removed to avoid duplication with compound indexes
   },
   agroZone: {
     type: String,
@@ -73,8 +73,8 @@ cropCalendarSchema.index({ crop_lower: 1, region: 1 });
 cropCalendarSchema.index({ season: 1, region: 1 });
 cropCalendarSchema.index({ agroZone: 1, season: 1 });
 
-// Pre-save middleware to automatically set crop_lower
-cropCalendarSchema.pre('save', function(next) {
+// Ensure crop_lower is set before validation so required passes
+cropCalendarSchema.pre('validate', function(next) {
   if (this.crop && !this.crop_lower) {
     this.crop_lower = this.crop.toLowerCase().trim();
   }

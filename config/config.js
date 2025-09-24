@@ -33,7 +33,13 @@ const config = {
   SMTP_PASS: process.env.SMTP_PASS || 'dcxc sflt iwhi vacu',
 
   // Frontend URL for password reset link
-  FRONTEND_RESET_URL: process.env.FRONTEND_RESET_URL || 'http://localhost:5173/reset-password'
+  FRONTEND_RESET_URL: process.env.FRONTEND_RESET_URL || 'http://localhost:5173/reset-password',
+  
+  // OpenWeather API Key
+  OPENWEATHER_API_KEY: process.env.OPENWEATHER_API_KEY || 'fb67984b6bfac1c183b043a963653f0d',
+
+  // Agmarknet API Key (Market Prices)
+  AGROMARKET_API_KEY: process.env.AGROMARKET_API_KEY || '312cf360936184e243d4a63db09f8a60e5a6539f5526c1e587ff9ce5682a1735'
 };
 
 module.exports = config; 

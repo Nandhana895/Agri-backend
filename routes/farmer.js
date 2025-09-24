@@ -564,6 +564,101 @@ router.get('/experts', auth, async (req, res) => {
   }
 });
 
+// Weather: proxy to external provider and normalize response
+router.get('/weather', auth, async (req, res) => {
+  try {
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+    if (!isFinite(lat) || !isFinite(lon)) {
+      return res.status(400).json({ success: false, message: 'Latitude and longitude are required' });
+    }
+
+    const openWeatherKey = process.env.OPENWEATHER_API_KEY || process.env.OPEN_WEATHER_API_KEY || '';
+
+    // Attempt OpenWeather first if key available
+    let current = null;
+    try {
+      if (openWeatherKey) {
+        const { data } = await axios.get('https://api.openweathermap.org/data/2.5/weather', {
+          params: { lat, lon, appid: openWeatherKey, units: 'metric' },
+          timeout: 12000
+        });
+        current = {
+          temperature: Math.round(Number(data.main?.temp) || 0),
+          humidity: Number(data.main?.humidity) || undefined,
+          rainfall: data.rain?.['1h'] ? `${data.rain['1h']} mm` : '—',
+          wind: Math.round((Number(data.wind?.speed) || 0) * 3.6), // m/s -> km/h
+          description: data.weather?.[0]?.description || '—',
+          icon: data.weather?.[0]?.icon || '01d'
+        };
+      }
+    } catch (_) {
+      current = null; // fallback below
+    }
+
+    // Fallback to Open-Meteo
+    if (!current) {
+      const { data } = await axios.get('https://api.open-meteo.com/v1/forecast', {
+        params: {
+          latitude: lat,
+          longitude: lon,
+          current: 'temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,weather_code',
+          hourly: 'temperature_2m,precipitation_probability,weather_code',
+          wind_speed_unit: 'kmh'
+        },
+        timeout: 12000
+      });
+      const c = data.current || {};
+      const codeText = (code => {
+        const m = {
+          0: 'Clear sky', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
+          45: 'Fog', 48: 'Depositing rime fog', 51: 'Light drizzle', 53: 'Moderate drizzle', 55: 'Dense drizzle',
+          61: 'Slight rain', 63: 'Moderate rain', 65: 'Heavy rain', 71: 'Slight snow fall', 73: 'Moderate snow fall', 75: 'Heavy snow fall',
+          80: 'Rain showers', 81: 'Rain showers', 82: 'Heavy rain showers', 95: 'Thunderstorm', 96: 'Thunderstorm with hail', 99: 'Severe thunderstorm'
+        }; return m[code] || 'Unknown';
+      })(c.weather_code);
+      current = {
+        temperature: Math.round(Number(c.temperature_2m) || 0),
+        humidity: Number(c.relative_humidity_2m) || undefined,
+        rainfall: '—',
+        wind: Math.round(Number(c.wind_speed_10m) || 0),
+        description: codeText,
+        icon: '01d'
+      };
+    }
+
+    // Build a lightweight 5-day forecast placeholder using current as baseline
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const today = new Date();
+    const forecast = Array.from({ length: 5 }).map((_, i) => {
+      const d = new Date(today.getTime());
+      d.setDate(today.getDate() + i);
+      const temp = Math.max(-10, Math.min(45, current.temperature + (i === 0 ? 0 : (i % 2 ? 1 : -1) * 2)));
+      return {
+        day: days[d.getDay()],
+        temp,
+        tempMin: Math.max(-15, temp - 3),
+        rain: i % 2 === 0 ? '—' : '20%'
+          ,
+        description: current.description,
+        icon: current.icon
+      };
+    });
+
+    return res.json({
+      success: true,
+      current,
+      location: { lat, lon },
+      forecast,
+      alerts: [],
+      recommendations: []
+    });
+  } catch (e) {
+    console.error('Weather endpoint error:', e?.response?.data || e.message || e);
+    return res.status(502).json({ success: false, message: 'Weather provider failed. Please try again.' });
+  }
+});
+
 // Sowing Calendar endpoint with sophisticated matching logic
 router.get('/sowing-calendar', auth, sowingCalendarRateLimit, async (req, res) => {
   try {
