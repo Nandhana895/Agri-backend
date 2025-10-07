@@ -6,6 +6,7 @@ const ConversationSchema = new mongoose.Schema(
     participantEmails: [{ type: String, lowercase: true, trim: true }],
     lastMessageAt: { type: Date, default: Date.now },
     lastMessageText: { type: String, default: '' },
+    pinnedMessages: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: [] }],
   },
   { timestamps: true }
 );

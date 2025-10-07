@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const PDFDocument = require('pdfkit');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const ChatRequest = require('../models/ChatRequest');
@@ -8,6 +12,32 @@ const auth = require('../middleware/auth');
 
 // All routes require auth
 router.use(auth);
+
+// Multer setup for chat attachments
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadsDir);
+  },
+  filename: function (req, file, cb) {
+    const timestamp = Date.now();
+    const ext = path.extname(file.originalname);
+    const safeBase = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+    cb(null, `chat_${timestamp}_${safeBase}${ext}`);
+  }
+});
+const fileFilter = (req, file, cb) => {
+  const allowed = [/^image\//, /^audio\//, /pdf$/i];
+  const ok = allowed.some((re) => re.test(file.mimetype));
+  if (!ok) {
+    return cb(new Error('Unsupported file type'));
+  }
+  cb(null, true);
+};
+const upload = multer({ storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024, files: 5 } });
 
 // List conversations for current user
 router.get('/conversations', async (req, res) => {
@@ -81,6 +111,64 @@ router.get('/conversations/:id/messages', async (req, res) => {
   }
 });
 
+// Create a message (with optional attachments)
+router.post('/conversations/:id/messages', upload.array('attachments', 5), async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const userEmail = String(req.user.email || '').toLowerCase();
+    const convoId = req.params.id;
+    const convo = await Conversation.findById(convoId).select('participants participantEmails');
+    if (!convo || !convo.participants.some((p) => p.toString() === userId.toString())) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+    const otherIndex = convo.participants.findIndex((p) => p.toString() !== userId.toString());
+    const toUserId = convo.participants[otherIndex];
+    const toEmail = convo.participantEmails[otherIndex];
+
+    const files = (req.files || []).map((f) => ({
+      fileName: f.filename,
+      originalName: f.originalname,
+      path: path.relative(path.join(__dirname, '..'), f.path).replace(/\\/g, '/'),
+      mimeType: f.mimetype,
+      size: f.size
+    }));
+
+    const text = String(req.body.text || '').slice(0, 2000);
+
+    if (!text && files.length === 0) {
+      return res.status(400).json({ success: false, message: 'Message text or attachment required' });
+    }
+
+    const message = await Message.create({
+      conversationId: convoId,
+      fromUserId: userId,
+      toUserId,
+      fromEmail: userEmail,
+      toEmail,
+      text,
+      deliveredAt: new Date(),
+      attachments: files
+    });
+
+    await Conversation.findByIdAndUpdate(convoId, {
+      $set: { lastMessageAt: new Date(), lastMessageText: text || (files.length ? `[${files.length} attachment(s)]` : '') }
+    });
+
+    // notify recipient via socket
+    try {
+      const io = req.app.get('io');
+      io.to(`user:${toUserId.toString()}`).emit('receive_message', {
+        conversationId: convoId,
+        ...message.toObject(),
+      });
+    } catch (_) {}
+
+    return res.status(201).json({ success: true, message });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: 'Failed to send message' });
+  }
+});
+
 // Mark messages as read in a conversation
 router.post('/conversations/:id/read', async (req, res) => {
   try {
@@ -90,10 +178,120 @@ router.post('/conversations/:id/read', async (req, res) => {
     if (!convo || !convo.participants.some((p) => p.toString() === userId.toString())) {
       return res.status(404).json({ success: false, message: 'Conversation not found' });
     }
-    await Message.updateMany({ conversationId: convoId, toUserId: userId, readAt: null }, { $set: { readAt: new Date() } });
+    const now = new Date();
+    await Message.updateMany({ conversationId: convoId, toUserId: userId, readAt: null }, { $set: { readAt: now } });
+    // notify sender over socket about read receipts
+    try {
+      const io = req.app.get('io');
+      const updated = await Message.find({ conversationId: convoId, toUserId: userId, readAt: { $gte: now } }).select('_id fromUserId');
+      const bySender = new Map();
+      updated.forEach((m) => {
+        const key = m.fromUserId.toString();
+        const list = bySender.get(key) || [];
+        list.push(m._id.toString());
+        bySender.set(key, list);
+      });
+      for (const [senderId, ids] of bySender.entries()) {
+        io.to(`user:${senderId}`).emit('messages_read', { conversationId: convoId, messageIds: ids });
+      }
+    } catch (_) {}
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ success: false, message: 'Failed to mark as read' });
+  }
+});
+
+// Pin / Unpin a message in a conversation
+router.post('/conversations/:id/pin', async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const convoId = req.params.id;
+    const { messageId, pinned } = req.body;
+    if (!messageId || typeof pinned === 'undefined') {
+      return res.status(400).json({ success: false, message: 'messageId and pinned are required' });
+    }
+    const convo = await Conversation.findById(convoId).select('participants pinnedMessages');
+    if (!convo || !convo.participants.some((p) => p.toString() === userId.toString())) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+    const msg = await Message.findOne({ _id: messageId, conversationId: convoId }).select('_id');
+    if (!msg) return res.status(404).json({ success: false, message: 'Message not found in conversation' });
+
+    await Message.updateOne({ _id: messageId }, { $set: { pinned: !!pinned } });
+    if (pinned) {
+      await Conversation.updateOne({ _id: convoId }, { $addToSet: { pinnedMessages: messageId } });
+    } else {
+      await Conversation.updateOne({ _id: convoId }, { $pull: { pinnedMessages: messageId } });
+    }
+
+    const updated = await Conversation.findById(convoId).select('pinnedMessages');
+    return res.json({ success: true, pinnedMessages: updated.pinnedMessages });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: 'Failed to update pin state' });
+  }
+});
+
+// Search messages in a conversation
+router.get('/conversations/:id/search', async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const convoId = req.params.id;
+    const query = String(req.query.query || '').trim();
+    const convo = await Conversation.findById(convoId).select('participants');
+    if (!convo || !convo.participants.some((p) => p.toString() === userId.toString())) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+    if (!query) return res.json({ success: true, results: [] });
+
+    const results = await Message.find({ conversationId: convoId, $text: { $search: query } })
+      .sort({ createdAt: 1 })
+      .limit(200)
+      .lean();
+    return res.json({ success: true, results });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: 'Search failed' });
+  }
+});
+
+// Export conversation as PDF
+router.get('/conversations/:id/export', async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const convoId = req.params.id;
+    const convo = await Conversation.findById(convoId).select('participants participantEmails');
+    if (!convo || !convo.participants.some((p) => p.toString() === userId.toString())) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+    const messages = await Message.find({ conversationId: convoId }).sort({ createdAt: 1 }).lean();
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="conversation_${convoId}.pdf"`);
+
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    doc.pipe(res);
+
+    doc.fontSize(18).text('AgriSense Conversation Export', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(12).text(`Conversation ID: ${convoId}`);
+    doc.text(`Participants: ${convo.participantEmails.join(' , ')}`);
+    doc.moveDown();
+
+    messages.forEach((m) => {
+      const header = `${new Date(m.createdAt).toLocaleString()} - ${m.fromEmail} -> ${m.toEmail}`;
+      doc.font('Helvetica-Bold').fontSize(11).text(header);
+      if (m.text) {
+        doc.font('Helvetica').fontSize(12).text(m.text);
+      }
+      if (Array.isArray(m.attachments) && m.attachments.length) {
+        doc.fontSize(10).fillColor('gray').text(`Attachments: ${m.attachments.map(a => a.originalName).join(', ')}`);
+        doc.fillColor('black');
+      }
+      doc.moveDown(0.5);
+    });
+
+    doc.end();
+  } catch (e) {
+    return res.status(500).json({ success: false, message: 'Export failed' });
   }
 });
 

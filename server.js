@@ -142,6 +142,8 @@ function startServer() {
       credentials: true
     }
   });
+  // make io accessible to routes
+  app.set('io', io);
 
   // Socket auth using Bearer token
   io.use(async (socket, next) => {
@@ -168,6 +170,16 @@ function startServer() {
       if (socket.user.email) {
         socket.join(`email:${String(socket.user.email).toLowerCase()}`);
       }
+      // Presence: mark online and notify email room
+      try {
+        const now = new Date();
+        User.updateOne({ _id: socket.user._id }, { $set: { lastActiveAt: now } }).catch(() => {});
+        io.to(`email:${String(socket.user.email).toLowerCase()}`).emit('presence', {
+          email: String(socket.user.email).toLowerCase(),
+          online: true,
+          lastActiveAt: now.toISOString()
+        });
+      } catch (_) {}
     }
 
     // Direct message: { toUserId?, toEmail?, text }
@@ -271,7 +283,18 @@ function startServer() {
       }
     });
 
-    socket.on('disconnect', () => {});
+    socket.on('disconnect', async () => {
+      try {
+        if (!socket.user?._id) return;
+        const now = new Date();
+        await User.updateOne({ _id: socket.user._id }, { $set: { lastActiveAt: now } });
+        io.to(`email:${String(socket.user.email || '').toLowerCase()}`).emit('presence', {
+          email: String(socket.user.email || '').toLowerCase(),
+          online: false,
+          lastActiveAt: now.toISOString()
+        });
+      } catch (_) {}
+    });
   });
 
   server.listen(PORT, () => {

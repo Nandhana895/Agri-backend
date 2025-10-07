@@ -63,6 +63,11 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  lastActiveAt: {
+    type: Date,
+    default: null,
+    index: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
