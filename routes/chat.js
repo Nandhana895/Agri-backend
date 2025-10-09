@@ -15,12 +15,22 @@ router.use(auth);
 
 // Multer setup for chat attachments
 const uploadsDir = path.join(__dirname, '..', 'uploads');
+const audioDir = path.join(uploadsDir, 'audio');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
+if (!fs.existsSync(audioDir)) {
+  fs.mkdirSync(audioDir, { recursive: true });
+}
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, uploadsDir);
+    // Route audio files to audio subdirectory
+    if (file.mimetype.startsWith('audio/')) {
+      cb(null, audioDir);
+    } else {
+      cb(null, uploadsDir);
+    }
   },
   filename: function (req, file, cb) {
     const timestamp = Date.now();
@@ -29,6 +39,7 @@ const storage = multer.diskStorage({
     cb(null, `chat_${timestamp}_${safeBase}${ext}`);
   }
 });
+
 const fileFilter = (req, file, cb) => {
   const allowed = [/^image\//, /^audio\//, /pdf$/i];
   const ok = allowed.some((re) => re.test(file.mimetype));
@@ -37,7 +48,21 @@ const fileFilter = (req, file, cb) => {
   }
   cb(null, true);
 };
+
 const upload = multer({ storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024, files: 5 } });
+
+// Audio-specific upload with smaller size limit
+const audioUpload = multer({ 
+  storage, 
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('audio/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio files allowed'));
+    }
+  },
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 } // 2MB limit for audio
+});
 
 // List conversations for current user
 router.get('/conversations', async (req, res) => {
@@ -125,13 +150,22 @@ router.post('/conversations/:id/messages', upload.array('attachments', 5), async
     const toUserId = convo.participants[otherIndex];
     const toEmail = convo.participantEmails[otherIndex];
 
-    const files = (req.files || []).map((f) => ({
-      fileName: f.filename,
-      originalName: f.originalname,
-      path: path.relative(path.join(__dirname, '..'), f.path).replace(/\\/g, '/'),
-      mimeType: f.mimetype,
-      size: f.size
-    }));
+    const files = (req.files || []).map((f) => {
+      const isAudio = f.mimetype.startsWith('audio/');
+      const isImage = f.mimetype.startsWith('image/');
+      const type = isAudio ? 'audio' : isImage ? 'image' : 'file';
+      const url = isAudio ? `/uploads/audio/${f.filename}` : `/uploads/${f.filename}`;
+      
+      return {
+        fileName: f.filename,
+        originalName: f.originalname,
+        path: path.relative(path.join(__dirname, '..'), f.path).replace(/\\/g, '/'),
+        mimeType: f.mimetype,
+        size: f.size,
+        type,
+        url
+      };
+    });
 
     const text = String(req.body.text || '').slice(0, 2000);
 
@@ -166,6 +200,86 @@ router.post('/conversations/:id/messages', upload.array('attachments', 5), async
     return res.status(201).json({ success: true, message });
   } catch (e) {
     return res.status(500).json({ success: false, message: 'Failed to send message' });
+  }
+});
+
+// Upload audio message
+router.post('/upload-audio', audioUpload.single('audio'), async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const userEmail = String(req.user.email || '').toLowerCase();
+    const { conversationId, text = '' } = req.body;
+
+    if (!conversationId) {
+      return res.status(400).json({ success: false, message: 'Conversation ID required' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Audio file required' });
+    }
+
+    // Verify user is part of the conversation
+    const convo = await Conversation.findById(conversationId).select('participants participantEmails');
+    if (!convo || !convo.participants.some((p) => p.toString() === userId.toString())) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+
+    const otherIndex = convo.participants.findIndex((p) => p.toString() !== userId.toString());
+    const toUserId = convo.participants[otherIndex];
+    const toEmail = convo.participantEmails[otherIndex];
+
+    // Create attachment object for audio
+    const audioAttachment = {
+      fileName: req.file.filename,
+      originalName: req.file.originalname,
+      path: path.relative(path.join(__dirname, '..'), req.file.path).replace(/\\/g, '/'),
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+      type: 'audio',
+      url: `/uploads/audio/${req.file.filename}`
+    };
+
+    // Create message with audio attachment
+    const message = await Message.create({
+      conversationId,
+      fromUserId: userId,
+      toUserId,
+      fromEmail: userEmail,
+      toEmail,
+      text: String(text).slice(0, 2000),
+      deliveredAt: new Date(),
+      attachments: [audioAttachment]
+    });
+
+    // Update conversation last message
+    await Conversation.findByIdAndUpdate(conversationId, {
+      $set: { 
+        lastMessageAt: new Date(), 
+        lastMessageText: text || '[Voice message]' 
+      }
+    });
+
+    // Notify recipient via socket
+    try {
+      const io = req.app.get('io');
+      io.to(`user:${toUserId.toString()}`).emit('receive_message', {
+        conversationId,
+        ...message.toObject(),
+      });
+    } catch (socketError) {
+      console.error('Socket notification error:', socketError);
+    }
+
+    return res.status(201).json({ 
+      success: true, 
+      message: {
+        ...message.toObject(),
+        attachments: [audioAttachment]
+      }
+    });
+  } catch (e) {
+    console.error('Audio upload error:', e);
+    return res.status(500).json({ success: false, message: 'Failed to upload audio message' });
   }
 });
 

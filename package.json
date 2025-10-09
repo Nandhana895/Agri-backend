@@ -11,7 +11,8 @@
     "test:acceptance": "node test-acceptance-criteria.js",
     "test:model": "node test-crop-calendar.js",
     "seed:admin": "node scripts/seed-admin.js",
-    "seed:calendar": "node seed-crop-calendar.js"
+    "seed:calendar": "node seed-crop-calendar.js",
+    "seed:fertilizer:file": "node scripts/seed-fertilizer-standards-from-file.js standards.json"
   },
   "keywords": [
     "nodejs",

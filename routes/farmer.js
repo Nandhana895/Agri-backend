@@ -284,123 +284,452 @@ router.get('/soil-analyses', auth, async (req, res) => {
   res.json({ success: true, data: list });
 });
 
-// Fertilizer Calculator endpoint
-router.post('/fertilizer-calculator', auth, [
-  body('area').isFloat({ min: 0 }),
+// Generate PDF report for fertilizer plan
+router.post('/fertilizer-pdf', auth, [
   body('crop').isString().trim().notEmpty(),
-  body('soilType').optional().isString(),
-  body('ph').optional().isFloat({ min: 0, max: 14 }),
-  body('nitrogen').optional().isFloat({ min: 0 }),
-  body('phosphorus').optional().isFloat({ min: 0 }),
-  body('potassium').optional().isFloat({ min: 0 })
+  body('region').isString().trim().notEmpty(),
+  body('landSize').isString().trim().notEmpty(),
+  body('fertilizer').isObject(),
+  body('recommended').isObject(),
+  body('unit').isString(),
+  body('splitDoses').optional().isArray(),
+  body('tips').optional().isArray(),
+  body('organicAdvice').optional().isString()
 ], validate, async (req, res) => {
   try {
-    const { area, crop, soilType, ph, nitrogen, phosphorus, potassium } = req.body;
+    const { crop, region, landSize, fertilizer, recommended, unit, splitDoses, tips, organicAdvice } = req.body;
     
-    // Base fertilizer rates per acre for different crops
-    const cropRates = {
-      'wheat': { npk: 120, nitrogen: 60, phosphorus: 30, potassium: 30 },
-      'rice': { npk: 100, nitrogen: 50, phosphorus: 25, potassium: 25 },
-      'maize': { npk: 140, nitrogen: 70, phosphorus: 35, potassium: 35 },
-      'sugarcane': { npk: 200, nitrogen: 100, phosphorus: 50, potassium: 50 },
-      'cotton': { npk: 160, nitrogen: 80, phosphorus: 40, potassium: 40 },
-      'potato': { npk: 180, nitrogen: 90, phosphorus: 45, potassium: 45 },
-      'tomato': { npk: 150, nitrogen: 75, phosphorus: 37, potassium: 38 },
-      'onion': { npk: 120, nitrogen: 60, phosphorus: 30, potassium: 30 },
-      'other': { npk: 100, nitrogen: 50, phosphorus: 25, potassium: 25 }
-    };
-
-    const cropKey = crop.toLowerCase();
-    const rates = cropRates[cropKey] || cropRates['other'];
+    // Create a simple HTML report
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Fertilizer Plan - ${crop}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; }
+          .header { text-align: center; border-bottom: 2px solid #22c55e; padding-bottom: 20px; margin-bottom: 30px; }
+          .section { margin: 20px 0; }
+          .section h3 { color: #22c55e; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; }
+          .fertilizer-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin: 20px 0; }
+          .fertilizer-item { text-align: center; padding: 15px; border: 1px solid #e5e7eb; border-radius: 8px; }
+          .fertilizer-item h4 { margin: 0 0 10px 0; color: #374151; }
+          .fertilizer-item .amount { font-size: 24px; font-weight: bold; color: #22c55e; }
+          .split-dose { margin: 10px 0; padding: 10px; background: #f9fafb; border-radius: 5px; }
+          .tip { margin: 5px 0; padding-left: 20px; }
+          .footer { margin-top: 40px; text-align: center; color: #6b7280; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>🌾 Fertilizer Plan Report</h1>
+          <h2>${crop} - ${region}</h2>
+          <p>Land Size: ${landSize}</p>
+          <p>Generated on: ${new Date().toLocaleDateString()}</p>
+        </div>
+        
+        <div class="section">
+          <h3>📊 Fertilizer Recommendations</h3>
+          <div class="fertilizer-grid">
+            <div class="fertilizer-item">
+              <h4>Urea</h4>
+              <div class="amount">${fertilizer.urea} ${unit}</div>
+            </div>
+            <div class="fertilizer-item">
+              <h4>DAP</h4>
+              <div class="amount">${fertilizer.dap} ${unit}</div>
+            </div>
+            <div class="fertilizer-item">
+              <h4>MOP</h4>
+              <div class="amount">${fertilizer.mop} ${unit}</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="section">
+          <h3>🧪 Nutrient Requirements</h3>
+          <div class="fertilizer-grid">
+            <div class="fertilizer-item">
+              <h4>Nitrogen</h4>
+              <div class="amount">${recommended.nitrogen} ${unit}</div>
+            </div>
+            <div class="fertilizer-item">
+              <h4>Phosphorus</h4>
+              <div class="amount">${recommended.phosphorus} ${unit}</div>
+            </div>
+            <div class="fertilizer-item">
+              <h4>Potassium</h4>
+              <div class="amount">${recommended.potassium} ${unit}</div>
+            </div>
+          </div>
+        </div>
+        
+        ${splitDoses && splitDoses.length > 0 ? `
+        <div class="section">
+          <h3>📅 Split Dose Schedule</h3>
+          ${splitDoses.map(dose => `
+            <div class="split-dose">
+              <strong>${dose.stage}</strong> - ${dose.timing || ''}
+              <br>
+              ${dose.urea > 0 ? `Urea: ${dose.urea}${unit}` : ''}
+              ${dose.dap > 0 ? `DAP: ${dose.dap}${unit}` : ''}
+              ${dose.mop > 0 ? `MOP: ${dose.mop}${unit}` : ''}
+              ${dose.notes ? `<br><em>${dose.notes}</em>` : ''}
+            </div>
+          `).join('')}
+        </div>
+        ` : ''}
+        
+        ${tips && tips.length > 0 ? `
+        <div class="section">
+          <h3>💡 Crop-Specific Tips</h3>
+          ${tips.map(tip => `<div class="tip">• ${tip}</div>`).join('')}
+        </div>
+        ` : ''}
+        
+        ${organicAdvice ? `
+        <div class="section">
+          <h3>🌱 Organic Alternatives</h3>
+          <p>${organicAdvice}</p>
+        </div>
+        ` : ''}
+        
+        <div class="footer">
+          <p>Generated by AgriSense Farmer Dashboard</p>
+          <p>For best results, consult with local agricultural extension officer</p>
+        </div>
+      </body>
+      </html>
+    `;
     
-    // Calculate base amounts
-    let totalAmount = Math.round(rates.npk * area);
-    let nitrogenAmount = Math.round(rates.nitrogen * area);
-    let phosphorusAmount = Math.round(rates.phosphorus * area);
-    let potassiumAmount = Math.round(rates.potassium * area);
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('Content-Disposition', `attachment; filename="fertilizer-plan-${crop.toLowerCase()}-${Date.now()}.html"`);
+    res.send(html);
+  } catch (e) {
+    console.error('PDF generation error:', e);
+    res.status(500).json({ success: false, message: 'Failed to generate PDF report' });
+  }
+});
 
-    // Adjust based on soil analysis if provided
-    if (ph && nitrogen && phosphorus && potassium) {
-      // pH adjustments
-      if (ph < 6) {
-        totalAmount = Math.round(totalAmount * 1.2); // Increase for acidic soil
-      } else if (ph > 7.5) {
-        totalAmount = Math.round(totalAmount * 0.9); // Decrease for alkaline soil
+// Get available crops and regions for fertilizer calculator
+router.get('/fertilizer-options', auth, async (req, res) => {
+  try {
+    const FertilizerStandard = require('../models/FertilizerStandard');
+    
+    const crops = await FertilizerStandard.distinct('crop');
+    const regions = await FertilizerStandard.distinct('region');
+
+    // Sensible defaults if DB has not been seeded yet
+    const defaultCrops = [
+      'Rice', 'Wheat', 'Maize', 'Tomato', 'Potato', 'Onion', 'Sugarcane', 'Cotton', 'Arecanut', 'Banana'
+    ];
+    const defaultRegions = [
+      'Kerala', 'Tamil Nadu', 'Karnataka', 'Andhra Pradesh', 'Telangana', 'Maharashtra', 'Gujarat', 'Rajasthan',
+      'Madhya Pradesh', 'Uttar Pradesh', 'Bihar', 'West Bengal', 'Odisha', 'Punjab', 'Haryana', 'Assam', 'All'
+    ];
+
+    const outCrops = (Array.isArray(crops) && crops.length > 0 ? crops : defaultCrops).sort();
+    const outRegions = (Array.isArray(regions) && regions.length > 0 ? regions : defaultRegions).sort();
+
+    res.json({
+      success: true,
+      data: {
+        crops: outCrops,
+        regions: outRegions
       }
+    });
+  } catch (e) {
+    console.error('Get fertilizer options error:', e);
+    res.status(500).json({ success: false, message: 'Failed to fetch options' });
+  }
+});
 
-      // Nutrient-specific adjustments
-      if (nitrogen < 20) {
-        nitrogenAmount = Math.round(nitrogenAmount * 1.3);
-      } else if (nitrogen > 60) {
-        nitrogenAmount = Math.round(nitrogenAmount * 0.7);
-      }
+// Get farmer's recent soil analyses for auto-fill
+router.get('/recent-soil-analyses', auth, async (req, res) => {
+  try {
+    const SoilAnalysis = require('../models/SoilAnalysis');
+    
+    const analyses = await SoilAnalysis.find({ user: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('_id ph organicMatter nitrogen phosphorus potassium soilType location createdAt');
+    
+    res.json({
+      success: true,
+      data: analyses
+    });
+  } catch (e) {
+    console.error('Get recent soil analyses error:', e);
+    res.status(500).json({ success: false, message: 'Failed to fetch soil analyses' });
+  }
+});
 
-      if (phosphorus < 15) {
-        phosphorusAmount = Math.round(phosphorusAmount * 1.4);
-      } else if (phosphorus > 40) {
-        phosphorusAmount = Math.round(phosphorusAmount * 0.6);
-      }
+// Enhanced Fertilizer Calculator endpoint
+router.post('/fertilizer-calculator', auth, [
+  body('crop').isString().trim().notEmpty(),
+  body('region').isString().trim().notEmpty(),
+  body('landSize').isFloat({ min: 0.001 }),
+  body('landUnit').isIn(['acre', 'hectare', 'sqm']),
+  body('soilType').optional().isString(),
+  body('organicCarbon').optional().isFloat({ min: 0, max: 10 }),
+  body('soilN').optional().isIn(['low', 'medium', 'high']),
+  body('soilP').optional().isIn(['low', 'medium', 'high']),
+  body('soilK').optional().isIn(['low', 'medium', 'high']),
+  body('fromSoilAnalysisId').optional().isMongoId()
+], validate, async (req, res) => {
+  try {
+    const { 
+      crop, 
+      region, 
+      landSize, 
+      landUnit, 
+      soilType, 
+      organicCarbon, 
+      soilN, 
+      soilP, 
+      soilK, 
+      fromSoilAnalysisId 
+    } = req.body;
 
-      if (potassium < 40) {
-        potassiumAmount = Math.round(potassiumAmount * 1.3);
-      } else if (potassium > 100) {
-        potassiumAmount = Math.round(potassiumAmount * 0.7);
-      }
-
-      totalAmount = nitrogenAmount + phosphorusAmount + potassiumAmount;
+    // Convert land units to hectares for calculation
+    let areaInHa;
+    switch (landUnit) {
+      case 'acre':
+        areaInHa = landSize * 0.4047;
+        break;
+      case 'hectare':
+        areaInHa = landSize;
+        break;
+      case 'sqm':
+        areaInHa = landSize / 10000;
+        break;
+      default:
+        areaInHa = landSize * 0.4047; // Default to acres
     }
 
-    // Soil type adjustments
+    // Find fertilizer standard for the crop and region
+    const FertilizerStandard = require('../models/FertilizerStandard');
+    let standard = await FertilizerStandard.findOne({
+      crop: { $regex: new RegExp(crop, 'i') },
+      region: { $regex: new RegExp(region, 'i') }
+    });
+
+    // Fallback to general standards if region-specific not found
+    if (!standard) {
+      standard = await FertilizerStandard.findOne({
+        crop: { $regex: new RegExp(crop, 'i') },
+        region: 'All'
+      });
+    }
+
+    // Final fallback: use any available standard for the crop (most recent), regardless of region
+    // This ensures users always get a result even if their specific state isn't in the DB
+    if (!standard) {
+      standard = await FertilizerStandard.findOne({
+        crop: { $regex: new RegExp(crop, 'i') }
+      }).sort({ lastUpdated: -1 });
+    }
+
+    if (!standard) {
+      return res.status(404).json({
+        success: false,
+        message: `Fertilizer data unavailable for ${crop} in ${region}. Please contact Agri Officer.`
+      });
+    }
+
+    // Auto-fetch soil analysis data if provided
+    let soilData = {};
+    if (fromSoilAnalysisId) {
+      const SoilAnalysis = require('../models/SoilAnalysis');
+      const soilAnalysis = await SoilAnalysis.findOne({
+        _id: fromSoilAnalysisId,
+        user: req.user._id
+      });
+      
+      if (soilAnalysis) {
+        soilData = {
+          organicCarbon: soilAnalysis.organicMatter || organicCarbon,
+          soilN: soilAnalysis.nitrogen ? 
+            (soilAnalysis.nitrogen < 20 ? 'low' : soilAnalysis.nitrogen > 60 ? 'high' : 'medium') : soilN,
+          soilP: soilAnalysis.phosphorus ? 
+            (soilAnalysis.phosphorus < 15 ? 'low' : soilAnalysis.phosphorus > 40 ? 'high' : 'medium') : soilP,
+          soilK: soilAnalysis.potassium ? 
+            (soilAnalysis.potassium < 40 ? 'low' : soilAnalysis.potassium > 100 ? 'high' : 'medium') : soilK
+        };
+      }
+    }
+
+    // Calculate base nutrient requirements
+    let nitrogenPerHa = standard.nitrogenPerHa;
+    let phosphorusPerHa = standard.phosphorusPerHa;
+    let potassiumPerHa = standard.potassiumPerHa;
+
+    // Apply soil type adjustments from standards when available
+    if (soilType && standard.soilAdjustments[soilType.toLowerCase()]) {
+      const adjustment = standard.soilAdjustments[soilType.toLowerCase()];
+      nitrogenPerHa *= adjustment.nitrogen;
+      phosphorusPerHa *= adjustment.phosphorus;
+      potassiumPerHa *= adjustment.potassium;
+    }
+
+    // Additional explicit nitrogen adjustments for realism
+    // Sandy soil → +10% N, Clay → -5% N (applied in addition to any standard multipliers)
     if (soilType) {
-      switch (soilType.toLowerCase()) {
-        case 'sandy':
-          totalAmount = Math.round(totalAmount * 1.1); // Sandy soils need more
-          break;
-        case 'clay':
-          totalAmount = Math.round(totalAmount * 0.9); // Clay soils retain nutrients better
-          break;
-        case 'loamy':
-          // No adjustment needed for loamy soil
-          break;
+      const st = soilType.toLowerCase();
+      if (st === 'sandy') {
+        nitrogenPerHa *= 1.10;
+      } else if (st === 'clay' || st === 'clayey') {
+        nitrogenPerHa *= 0.95;
       }
     }
 
-    const breakdown = {
-      nitrogen: nitrogenAmount,
-      phosphorus: phosphorusAmount,
-      potassium: potassiumAmount
-    };
+    // Apply organic matter adjustments from standards
+    const organicLevel = soilData.organicCarbon || organicCarbon;
+    if (organicLevel !== undefined) {
+      let organicAdjustment;
+      if (organicLevel < 1) {
+        organicAdjustment = standard.organicMatterAdjustments.low;
+      } else if (organicLevel > 3) {
+        organicAdjustment = standard.organicMatterAdjustments.high;
+      } else {
+        organicAdjustment = standard.organicMatterAdjustments.medium;
+      }
+      nitrogenPerHa *= organicAdjustment.nitrogen;
+      phosphorusPerHa *= organicAdjustment.phosphorus;
+      potassiumPerHa *= organicAdjustment.potassium;
 
-    let notes = `Recommended for ${crop} on ${area} acres`;
-    if (soilType) {
-      notes += ` in ${soilType} soil`;
-    }
-    if (ph) {
-      notes += ` with pH ${ph}`;
+      // If organic carbon > 1% → reduce N by additional 10%
+      if (organicLevel > 1) {
+        nitrogenPerHa *= 0.90;
+      }
     }
 
-    const dosage = {
-      totalAmount,
-      breakdown,
-      notes,
-      crop,
-      area,
-      soilType: soilType || 'Not specified'
+    // Apply soil nutrient level adjustments
+    if (soilData.soilN || soilN) {
+      const level = soilData.soilN || soilN;
+      if (level === 'low') nitrogenPerHa *= 1.3;
+      else if (level === 'high') nitrogenPerHa *= 0.7;
+    }
+
+    if (soilData.soilP || soilP) {
+      const level = soilData.soilP || soilP;
+      if (level === 'low') phosphorusPerHa *= 1.4;
+      else if (level === 'high') phosphorusPerHa *= 0.6;
+    }
+
+    if (soilData.soilK || soilK) {
+      const level = soilData.soilK || soilK;
+      if (level === 'low') potassiumPerHa *= 1.3;
+      else if (level === 'high') potassiumPerHa *= 0.7;
+    }
+
+    // Calculate total nutrient requirements for the area
+    const totalNitrogen = nitrogenPerHa * areaInHa;
+    const totalPhosphorus = phosphorusPerHa * areaInHa;
+    const totalPotassium = potassiumPerHa * areaInHa;
+
+    // Convert nutrients to fertilizer equivalents
+    // Urea = 46% N, DAP = 18% N + 46% P, MOP = 60% K
+    const ureaRequired = totalNitrogen / 0.46;
+    const dapRequired = totalPhosphorus / 0.46; // DAP provides P
+    const mopRequired = totalPotassium / 0.60;
+
+    // Adjust urea for DAP's nitrogen contribution
+    const nitrogenFromDap = dapRequired * 0.18;
+    const adjustedUrea = Math.max(0, ureaRequired - nitrogenFromDap);
+
+    // Determine unit: grams for small areas; also avoid displaying "0 kg"
+    let isSmallArea = areaInHa < 0.08; // Less than 0.2 acres → grams
+    let unit = isSmallArea ? 'g' : 'kg';
+    // If area considered large but totals are very small, fallback to grams to avoid "0 kg"
+    // Threshold: any fertilizer or nutrient < 0.1 kg → use grams for display
+    const wouldBeSmallKg = (!isSmallArea) && (
+      totalNitrogen < 0.1 || totalPhosphorus < 0.1 || totalPotassium < 0.1 ||
+      adjustedUrea < 0.1 || dapRequired < 0.1 || mopRequired < 0.1
+    );
+    if (wouldBeSmallKg) {
+      isSmallArea = true;
+      unit = 'g';
+    }
+    const multiplier = isSmallArea ? 1000 : 1;
+
+    // Calculate split doses
+    const splitDoses = standard.splitDoses.map(dose => ({
+      stage: dose.stage,
+      urea: Math.round((adjustedUrea * dose.nitrogenPercent / 100) * multiplier),
+      dap: Math.round((dapRequired * dose.phosphorusPercent / 100) * multiplier),
+      mop: Math.round((mopRequired * dose.potassiumPercent / 100) * multiplier),
+      timing: dose.timing,
+      notes: dose.notes
+    }));
+
+    // Generate organic advice
+    let organicAdvice = '';
+    if (standard.organicAdvice.compost) {
+      const compostAmount = isSmallArea ? 
+        `${Math.round(parseFloat(standard.organicAdvice.compost.amount.split('-')[0]) * areaInHa * 1000)}g` :
+        `${Math.round(parseFloat(standard.organicAdvice.compost.amount.split('-')[0]) * areaInHa)}kg`;
+      organicAdvice += `Add ${compostAmount} compost ${standard.organicAdvice.compost.timing}. `;
+    }
+
+    // Prepare result
+    const result = {
+      crop: standard.crop,
+      region: standard.region,
+      landSize: `${landSize} ${landUnit}`,
+      recommended: {
+        nitrogen: Math.round(totalNitrogen * multiplier),
+        phosphorus: Math.round(totalPhosphorus * multiplier),
+        potassium: Math.round(totalPotassium * multiplier)
+      },
+      fertilizer: {
+        urea: Math.round(adjustedUrea * multiplier),
+        dap: Math.round(dapRequired * multiplier),
+        mop: Math.round(mopRequired * multiplier)
+      },
+      unit,
+      splitDoses,
+      tips: standard.tips,
+      organicAdvice: organicAdvice.trim(),
+      message: `${standard.region?.toLowerCase() === String(region).toLowerCase() ?
+        `Calculated using ${standard.region} region fertilizer standards (${standard.source}).` :
+        `Region-specific data for ${crop} in ${region} was not found. Using ${standard.region} standards (${standard.source}).`}`
     };
 
     // Save to database
-    const plan = await FertilizerPlan.create({ 
-      user: req.user._id, 
-      areaAcres: area, 
-      crop, 
-      dosageKg: totalAmount,
-      breakdown,
-      notes
+    const FertilizerPlan = require('../models/FertilizerPlan');
+    const plan = await FertilizerPlan.create({
+      user: req.user._id,
+      areaAcres: landSize,
+      areaUnit: landUnit,
+      crop: standard.crop,
+      region: standard.region,
+      soilType,
+      organicCarbon: soilData.organicCarbon || organicCarbon,
+      soilN: soilData.soilN || soilN,
+      soilP: soilData.soilP || soilP,
+      soilK: soilData.soilK || soilK,
+      fromSoilAnalysisId,
+      recommended: result.recommended,
+      fertilizer: result.fertilizer,
+      unit: result.unit,
+      splitDoses: result.splitDoses,
+      tips: result.tips,
+      organicAdvice: result.organicAdvice,
+      message: result.message,
+      // Legacy fields
+      dosageKg: Math.round((adjustedUrea + dapRequired + mopRequired) * multiplier / 1000),
+      breakdown: {
+        nitrogen: result.recommended.nitrogen,
+        phosphorus: result.recommended.phosphorus,
+        potassium: result.recommended.potassium
+      },
+      notes: result.message
     });
 
-    res.status(201).json({ success: true, data: dosage });
+    res.status(201).json({ success: true, data: result });
   } catch (e) {
-    console.error('Fertilizer calculator error:', e);
+    console.error('Enhanced fertilizer calculator error:', e);
     res.status(500).json({ success: false, message: 'Fertilizer calculation failed' });
   }
 });

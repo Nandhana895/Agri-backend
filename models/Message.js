@@ -6,7 +6,9 @@ const AttachmentSchema = new mongoose.Schema(
     originalName: { type: String, required: true },
     path: { type: String, required: true },
     mimeType: { type: String, required: true },
-    size: { type: Number, required: true }
+    size: { type: Number, required: true },
+    type: { type: String, enum: ['audio', 'image', 'file'], default: 'file' },
+    url: { type: String, required: true }
   },
   { _id: false }
 );

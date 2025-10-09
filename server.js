@@ -36,7 +36,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Static files for uploaded images
+// Static files for uploaded images and audio
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/admin/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Connect to MongoDB
