@@ -150,6 +150,7 @@ router.post('/signup', [
         name: user.name,
         email: user.email,
         role: user.role,
+        avatarUrl: user.avatarUrl,
         createdAt: user.createdAt
       }
     });
@@ -261,6 +262,7 @@ router.post('/login', [
         name: user.name,
         email: user.email,
         role: user.role,
+        avatarUrl: user.avatarUrl,
         createdAt: user.createdAt
       }
     });
@@ -343,7 +345,7 @@ router.post('/google', async (req, res) => {
     }
 
     const token = jwt.sign({ userId: user._id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
-    res.json({ success: true, message: 'Login successful', token, user: { id: user._id, name: user.name, email: user.email, role: user.role, createdAt: user.createdAt } });
+    res.json({ success: true, message: 'Login successful', token, user: { id: user._id, name: user.name, email: user.email, role: user.role, avatarUrl: user.avatarUrl, createdAt: user.createdAt } });
   } catch (error) {
     console.error('Google login error:', error);
     res.status(500).json({ success: false, message: 'Server error during Google login' });
