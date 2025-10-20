@@ -1,6 +1,7 @@
 const express = require('express');
 const { body } = require('express-validator');
 const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 
@@ -12,6 +13,7 @@ const CropCalendar = require('../models/CropCalendar');
 const User = require('../models/User');
 const ActionLog = require('../models/ActionLog');
 const FarmLog = require('../models/FarmLog');
+const Field = require('../models/Field');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const router = express.Router();
@@ -39,12 +41,18 @@ const sowingCalendarRateLimit = rateLimit({
 // Dashboard endpoint
 router.get('/dashboard', auth, async (req, res) => {
   try {
+    // Get field statistics
+    const fieldStats = await Field.getFieldStats(req.user._id);
+    
     // Get basic stats
     const stats = {
-      activeFields: 0, // This would come from a fields model in a real app
+      activeFields: fieldStats.activeFields,
+      totalFields: fieldStats.totalFields,
+      totalArea: fieldStats.totalArea,
+      fieldsWithCrops: fieldStats.fieldsWithCrops,
       soilTests: await SoilAnalysis.countDocuments({ user: req.user._id }),
       recommendations: await CropRecommendation.countDocuments({ user: req.user._id }),
-      irrigationEvents: 0 // This would come from an irrigation model in a real app
+      farmLogs: await FarmLog.countDocuments({ farmerId: req.user._id })
     };
 
     // Get recent recommendations

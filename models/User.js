@@ -68,6 +68,15 @@ const userSchema = new mongoose.Schema({
     default: null,
     index: true
   },
+  fields: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Field'
+  }],
+  activeFieldId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Field',
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

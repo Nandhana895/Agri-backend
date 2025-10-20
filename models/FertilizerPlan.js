@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const fertilizerPlanSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  fieldId: { type: mongoose.Schema.Types.ObjectId, ref: 'Field', index: true },
   areaAcres: { type: Number, required: true },
   areaUnit: { type: String, enum: ['acre', 'hectare', 'sqm'], default: 'acre' },
   crop: { type: String, required: true },
@@ -45,6 +46,10 @@ const fertilizerPlanSchema = new mongoose.Schema({
   formula: { type: String, default: 'NPK 10-10-10' },
   notes: { type: String }
 }, { timestamps: true });
+
+// Compound indexes for efficient queries
+fertilizerPlanSchema.index({ user: 1, fieldId: 1 });
+fertilizerPlanSchema.index({ fieldId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('FertilizerPlan', fertilizerPlanSchema);
 

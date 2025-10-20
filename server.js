@@ -15,6 +15,7 @@ const adminRoutes = require('./routes/admin');
 const farmerRoutes = require('./routes/farmer');
 const expertRoutes = require('./routes/expert');
 const chatRoutes = require('./routes/chat');
+const fieldRoutes = require('./routes/field');
 const path = require('path');
 const Conversation = require('./models/Conversation');
 const Message = require('./models/Message');
@@ -85,7 +86,9 @@ mongoose.connect(config.MONGODB_URI)
   })
   .catch((error) => {
     console.error('❌ MongoDB connection error:', error);
-    process.exit(1);
+    console.log('⚠️  Starting server without MongoDB for development...');
+    // Start server even without MongoDB for development
+    startServer();
   });
 
 // MongoDB connection event handlers
@@ -103,6 +106,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/farmer', farmerRoutes);
 app.use('/api/expert', expertRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/fields', fieldRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
