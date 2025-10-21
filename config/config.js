@@ -9,6 +9,9 @@ const config = {
   // Server Port
   PORT: process.env.PORT || 5000,
   
+  // Backend URL for internal references
+  BACKEND_URL: process.env.BACKEND_URL || 'http://localhost:5000',
+  
   // Frontend URL for CORS
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
   

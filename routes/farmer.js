@@ -1389,9 +1389,9 @@ router.post('/ocr/pdf-summary', auth, uploadMemory.single('file'), async (req, r
 // POST /api/farmer/logs - Add new log entry
 router.post('/logs', auth, [
   body('date').isISO8601().withMessage('Date must be a valid ISO 8601 date'),
-  body('activityType').isIn(['Sowing', 'Irrigation', 'Fertilizer', 'Harvesting', 'Government Scheme', 'Other']).withMessage('Invalid activity type'),
+  body('activityType').isIn(['Sowing', 'Irrigation', 'Fertilizer', 'Harvesting', 'Government Scheme', 'AI Recommendation', 'Other']).withMessage('Invalid activity type'),
   body('crop').optional().isString().trim().isLength({ max: 100 }).withMessage('Crop name cannot exceed 100 characters'),
-  body('notes').optional().isString().trim().isLength({ max: 500 }).withMessage('Notes cannot exceed 500 characters')
+  body('notes').optional().isString().trim().isLength({ max: 1000 }).withMessage('Notes cannot exceed 1000 characters')
 ], validate, async (req, res) => {
   try {
     const { date, activityType, crop, notes } = req.body;
@@ -1458,9 +1458,9 @@ router.get('/logs', auth, async (req, res) => {
 // PUT /api/farmer/logs/:id - Edit a log entry
 router.put('/logs/:id', auth, [
   body('date').optional().isISO8601().withMessage('Date must be a valid ISO 8601 date'),
-  body('activityType').optional().isIn(['Sowing', 'Irrigation', 'Fertilizer', 'Harvesting', 'Government Scheme', 'Other']).withMessage('Invalid activity type'),
+  body('activityType').optional().isIn(['Sowing', 'Irrigation', 'Fertilizer', 'Harvesting', 'Government Scheme', 'AI Recommendation', 'Other']).withMessage('Invalid activity type'),
   body('crop').optional().isString().trim().isLength({ max: 100 }).withMessage('Crop name cannot exceed 100 characters'),
-  body('notes').optional().isString().trim().isLength({ max: 500 }).withMessage('Notes cannot exceed 500 characters')
+  body('notes').optional().isString().trim().isLength({ max: 1000 }).withMessage('Notes cannot exceed 1000 characters')
 ], validate, async (req, res) => {
   try {
     const { id } = req.params;

@@ -19,7 +19,7 @@ const farmLogSchema = new mongoose.Schema({
   },
   activityType: {
     type: String,
-    enum: ['Sowing', 'Irrigation', 'Fertilizer', 'Harvesting', 'Government Scheme', 'Other'],
+    enum: ['Sowing', 'Irrigation', 'Fertilizer', 'Harvesting', 'Government Scheme', 'AI Recommendation', 'Other'],
     required: [true, 'Activity type is required'],
     index: true
   },
@@ -31,7 +31,7 @@ const farmLogSchema = new mongoose.Schema({
   notes: {
     type: String,
     trim: true,
-    maxlength: [500, 'Notes cannot exceed 500 characters']
+    maxlength: [1000, 'Notes cannot exceed 1000 characters']
   }
 }, {
   timestamps: true
@@ -57,6 +57,7 @@ farmLogSchema.methods.getActivityDisplayName = function() {
     'Fertilizer': 'Fertilizer Application',
     'Harvesting': 'Harvesting',
     'Government Scheme': 'Government Scheme',
+    'AI Recommendation': 'AI Recommendation',
     'Other': 'Other Activity'
   };
   return displayNames[this.activityType] || this.activityType;
