@@ -305,8 +305,8 @@ function startServer() {
   server.listen(PORT, () => {
     console.log('🚀 Server started successfully');
     console.log(`🌐 Server running on port ${PORT}`);
-    console.log(`🔗 API Base URL: ${config.BACKEND_URL}/api`);
-    console.log(`🔗 Health Check: ${config.BACKEND_URL}/api/health`);
+    console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
+    console.log(`🔗 Health Check: http://localhost:${PORT}/api/health`);
     console.log(`🔗 Frontend URL: ${config.FRONTEND_URL}`);
   });
 }

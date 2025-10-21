@@ -116,8 +116,6 @@ router.get('/', auth, async (req, res) => {
 
     const fields = await Field.find(query)
       .populate('logs', 'type date description')
-      .populate('expenses', 'amount category date')
-      .populate('tasks', 'title status dueDate')
       .sort({ createdAt: -1 });
 
     res.json({
@@ -136,6 +134,43 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// @route   GET /api/farmer/fields/stats
+// @desc    Get field statistics for logged-in farmer
+// @access  Private (Farmer only)
+router.get('/stats', auth, async (req, res) => {
+  try {
+    const farmerId = req.user._id;
+    
+    const fields = await Field.find({ farmerId });
+    
+    const stats = {
+      totalFields: fields.length,
+      activeFields: fields.filter(field => field.status === 'Active').length,
+      totalArea: fields.reduce((sum, field) => {
+        const area = field.area || 0;
+        const multiplier = field.areaUnit === 'hectare' ? 1 : 
+                          field.areaUnit === 'acre' ? 0.404686 : 
+                          field.areaUnit === 'sqm' ? 0.0001 : 1;
+        return sum + (area * multiplier);
+      }, 0),
+      fieldsWithCrops: fields.filter(field => field.crop && field.crop.trim()).length
+    };
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+    
+  } catch (error) {
+    console.error('Error fetching field stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching field statistics',
+      error: error.message
+    });
+  }
+});
+
 // @route   GET /api/farmer/fields/:id
 // @desc    Get a single field by ID
 // @access  Private (Farmer only)
@@ -145,9 +180,7 @@ router.get('/:id', auth, async (req, res) => {
       _id: req.params.id,
       farmerId: req.user.id
     })
-      .populate('logs', 'type date description')
-      .populate('expenses', 'amount category date')
-      .populate('tasks', 'title status dueDate');
+      .populate('logs', 'type date description');
 
     if (!field) {
       return res.status(404).json({
@@ -243,9 +276,7 @@ router.put('/:id', auth, async (req, res) => {
       updateData,
       { new: true, runValidators: true }
     )
-      .populate('logs', 'type date description')
-      .populate('expenses', 'amount category date')
-      .populate('tasks', 'title status dueDate');
+      .populate('logs', 'type date description');
 
     res.json({
       success: true,
@@ -390,9 +421,7 @@ router.get('/:id/analytics', auth, async (req, res) => {
       _id: req.params.id,
       farmerId: req.user.id
     })
-      .populate('logs', 'type date description')
-      .populate('expenses', 'amount category date')
-      .populate('tasks', 'title status dueDate');
+      .populate('logs', 'type date description');
 
     if (!field) {
       return res.status(404).json({
@@ -413,13 +442,9 @@ router.get('/:id/analytics', auth, async (req, res) => {
         fieldAge: field.fieldAge
       },
       expenses: {
-        total: field.expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0),
-        count: field.expenses.length,
-        byCategory: field.expenses.reduce((acc, expense) => {
-          const category = expense.category || 'Other';
-          acc[category] = (acc[category] || 0) + (expense.amount || 0);
-          return acc;
-        }, {})
+        total: 0,
+        count: 0,
+        byCategory: {}
       },
       logs: {
         total: field.logs.length,
@@ -430,19 +455,14 @@ router.get('/:id/analytics', auth, async (req, res) => {
         }, {})
       },
       tasks: {
-        total: field.tasks.length,
-        completed: field.tasks.filter(task => task.status === 'Completed').length,
-        pending: field.tasks.filter(task => task.status === 'Pending').length,
-        overdue: field.tasks.filter(task => 
-          task.status === 'Pending' && 
-          task.dueDate && 
-          new Date(task.dueDate) < new Date()
-        ).length
+        total: 0,
+        completed: 0,
+        pending: 0,
+        overdue: 0
       },
       performance: {
         yieldPerAcre: field.yield && field.area ? field.yield / field.area : null,
-        costPerAcre: field.expenses.length > 0 && field.area ? 
-          field.expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0) / field.area : null
+        costPerAcre: null
       }
     };
 

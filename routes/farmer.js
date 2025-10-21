@@ -1585,7 +1585,6 @@ router.get('/logs/stats', auth, async (req, res) => {
   }
 });
 
-module.exports = router;
 // Government Schemes: filter by crop and region
 router.get('/schemes', auth, async (req, res) => {
   try {
@@ -1642,3 +1641,5 @@ router.get('/schemes', auth, async (req, res) => {
     return res.status(500).json({ success: false, message: 'Failed to fetch schemes' });
   }
 });
+
+module.exports = router;
